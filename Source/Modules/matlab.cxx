@@ -1,3 +1,4 @@
+#define KTFIXME
 /* -----------------------------------------------------------------------------
  * This file is part of SWIG, which is licensed as a whole under version 3 
  * (or any later version) of the GNU General Public License. Some additional
@@ -1446,7 +1447,9 @@ int MATLAB::staticmembervariableHandler(Node *n) {
 
   // Add to function switch
   int gw_ind_get = toGateway(getname,getwname);
+#ifndef KTFIXME
   int gw_ind_set = toGateway(setname,setwname);
+#endif
 
   // Add getter/setter function
   Printf(static_methods,"    function varargout = %s(varargin)\n",symname);  
@@ -1456,7 +1459,9 @@ int MATLAB::staticmembervariableHandler(Node *n) {
   Printf(static_methods,"        varargout{1} = %s(%d,'%s');\n",mex_fcn,gw_ind_get,getname);
   Printf(static_methods,"      else\n");
   Printf(static_methods,"        nargoutchk(0,0)\n");
+#ifndef KTFIXME
   Printf(static_methods,"        %s(%d,'%s',varargin{1});\n",mex_fcn,gw_ind_set,setname);
+#endif
   Printf(static_methods,"      end\n");
   Printf(static_methods,"    end\n");
 
