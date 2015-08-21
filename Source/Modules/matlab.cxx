@@ -2322,13 +2322,9 @@ void MATLAB::wrapConstructor(int gw_ind, String *symname, String *fullname, Node
     if (fullname==0) {
       Printf(f_wrap_m,"        error('No matching constructor');\n");
     } else {
-      Printf(f_wrap_m,"        %% How to get working on C side? Commented out, replaed by hack below\n");
-      Printf(f_wrap_m,"        %%self.swigInd = %s(%d, varargin{:});\n", mex_fcn, gw_ind);
       if (have_matlabprepend(n))
         Printf(f_wrap_m, "%s\n",matlabprepend(n));
-      Printf(f_wrap_m,"        tmp = %s(%d, varargin{:}); %% FIXME\n", mex_fcn, gw_ind);
-      Printf(f_wrap_m,"        self.swigInd = tmp.swigInd;\n");
-      Printf(f_wrap_m,"        tmp.swigInd = uint64(0);\n");
+      Printf(f_wrap_m,"        self.swigInd = %s(%d, varargin{:});\n", mex_fcn, gw_ind);
       if (have_matlabappend(n))
         Printf(f_wrap_m, "%s\n",matlabappend(n));
     }
@@ -2343,17 +2339,13 @@ void MATLAB::wrapConstructorDirector(int gw_ind, String *symname, String *fullna
     if (fullname==0) {
       Printf(f_wrap_m,"        error('No matching constructor');\n");
     } else {
-      Printf(f_wrap_m,"        %% How to get working on C side? Commented out, replaed by hack below\n");
-      Printf(f_wrap_m,"        %%self.swigInd = %s(%d, varargin{:});\n", mex_fcn, gw_ind);
       if (have_matlabprepend(n))
         Printf(f_wrap_m, "%s\n",matlabprepend(n));
       Printf(f_wrap_m,"        if strcmp(class(self),'director_basic.%s')\n", symname);
-      Printf(f_wrap_m,"          tmp = %s(%d, 0, varargin{:}); %% FIXME\n", mex_fcn, gw_ind);
+      Printf(f_wrap_m,"          self.swigInd = %s(%d, 0, varargin{:});\n", mex_fcn, gw_ind);
       Printf(f_wrap_m,"        else\n");
-      Printf(f_wrap_m,"          tmp = %s(%d, self, varargin{:}); %% FIXME\n", mex_fcn, gw_ind);
+      Printf(f_wrap_m,"          self.swigInd = %s(%d, self, varargin{:});\n", mex_fcn, gw_ind);
       Printf(f_wrap_m,"        end\n");
-      Printf(f_wrap_m,"        self.swigInd = tmp.swigInd;\n");
-      Printf(f_wrap_m,"        tmp.swigInd = uint64(0);\n");
       if (have_matlabappend(n))
         Printf(f_wrap_m, "%s\n",matlabappend(n));
     }

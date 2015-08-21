@@ -204,32 +204,7 @@ void SWIG_Matlab_ExitFcn(void) {
 
 /* Runtime API implementation */
 SWIGRUNTIME mxArray* SWIG_Matlab_NewPointerObj(void *ptr, swig_type_info *type, int flags) {
-  mxArray* pm_command = mxCreateString("_swigCreate");
-  mxArray* pm;
-  const char * matlab_classname;
-  if (type->clientdata) {
-    matlab_classname = (const char *)type->clientdata;
-  } else {
-    /* TODO do we really want this? it's a fall-back for non-package types (e.g pointer-to-float)
-       However, it will fail anyway because the mexCallMATLABWithTrap call will fail 
-       (as there'd be no package.float matlab-type)
-    */
-    matlab_classname = type->name+3;    /* FIXME: Hack to dereference pointer */
-    mexWarnMsgIdAndTxt("SWIG:NewPointerObj","NewPointerObj problem. clientdata NULL. guessed %s", matlab_classname);
-  }
-
-  mxArray* ex = mexCallMATLABWithTrap(1, &pm, 1, &pm_command, matlab_classname);
-
-  /* Hack hack */
-  if(ex){
-    /* the above failed, so let's just create a SwigRef */
-    mxDestroyArray(ex);
-    mexWarnMsgIdAndTxt("SWIG:NewPointerObj","NewPointerObj problem. creating SwigRef as opposed to %s", matlab_classname);
-    ex = mexCallMATLABWithTrap(1, &pm, 0, 0,"SwigRef");
-  }
-
-  if(ex) mexErrMsgIdAndTxt("SWIG:NewPointerObj","mexCallMATLABWithTrap failed for %s",type->name);
-  mxDestroyArray(pm_command);
+  mxArray *pm_ind = 0;
 
   /* Ownership? */
   int own = (flags & SWIG_POINTER_OWN) ? SWIG_POINTER_OWN : 0;
@@ -240,14 +215,12 @@ SWIGRUNTIME mxArray* SWIG_Matlab_NewPointerObj(void *ptr, swig_type_info *type, 
     mexErrMsgIdAndTxt("SWIG:NewPointerObj","Cannot allocate pointer");
   }
 
-  /* Pass to class */
-  mxArray *pm_ind = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);
+  /* Return index directly to class */
+  pm_ind = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);
   *(uint64_T *)mxGetData(pm_ind) = (uint64_T)ind;
   if(!pm_ind) mexErrMsgIdAndTxt("SWIG:NewPointerObj","mxCreateNumericMatrix failed");
-  mxSetProperty(pm, 0, "swigInd", pm_ind);
-  mxDestroyArray(pm_ind);
   
-  return pm;
+  return pm_ind;
 }
 
 SWIGRUNTIME int SWIG_Matlab_isOwned(mxArray* pm) {
