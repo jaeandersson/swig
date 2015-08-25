@@ -159,7 +159,7 @@ SWIGRUNTIME SwigPtr* SWIG_Matlab_getSwigPtr(mxArray* pm, size_t *out_ind, int *e
 SWIGRUNTIME int SWIG_Matlab_NewPointer(size_t* ind_ptr, void *ptr, swig_type_info *type, int own) {
   /* Check input arguments */
   if (!ind_ptr || !type) return 1;
-  size_t ind;
+  size_t ind = 0;
 
   /* If first time encountered, allocate memory (first element null pointer) */
   if (swigPtrNumAlloc==0) {
@@ -265,7 +265,7 @@ SWIGRUNTIME mxArray* SWIG_Matlab_NewPointerObj(void *ptr, swig_type_info *type, 
   int own = (flags & SWIG_POINTER_OWN) ? SWIG_POINTER_OWN : 0;
 
   /* Allocate a pointer object */  
-  size_t ind;
+  size_t ind = 0;
   if (SWIG_Matlab_NewPointer(&ind, ptr, type, own)) {
     mexErrMsgIdAndTxt("SWIG:NewPointerObj","Cannot allocate pointer");
   }
