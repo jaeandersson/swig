@@ -1,6 +1,7 @@
 %insert(runtime) %{
 #include <mex.h>
 #include <math.h> /* need this for floor() */
+#include <string.h> /* need this for strcmp() */
 %}
 
 %insert(runtime) "swigrun.swg";
@@ -17,8 +18,15 @@
 %insert(initbeforefunc) %{
 static bool is_loaded = false;
 void SWIG_Matlab_LoadModule(const char* name) {
-  SWIG_InitializeModule(0);
-  SWIG_PropagateClientData();
+  /* Initialize module if first load */
+  if (!is_loaded) {
+    SWIG_InitializeModule(0);
+  } else if (!SWIG_GetModule(0)) {
+      /* Handle special case when mex is still loaded
+       * and global module variable deleted.*/
+      swig_module.next = 0;
+      SWIG_InitializeModule(0);
+  }
   if(false){
     mexErrMsgIdAndTxt("SWIG:LoadFailure","Could not load module %s",name);
   }

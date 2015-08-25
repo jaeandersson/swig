@@ -58,15 +58,15 @@ SWIGRUNTIME void SWIG_Error(int code, const char *msg) {
 #define SWIG_ConvertMember(obj, ptr, sz, ty)            SWIG_Matlab_ConvertPacked(obj, ptr, sz, ty)
 #define SWIG_NewMemberObj(ptr, sz, type)                SWIG_Matlab_NewPackedObj(ptr, sz, type)
 
-#define SWIG_GetModule(clientdata) SWIG_Matlab_GetModule(clientdata)
-#define SWIG_SetModule(clientdata, pointer) SWIG_Matlab_SetModule(clientdata,pointer);
+#define SWIG_GetModule(clientdata)                      SWIG_Matlab_GetModule(clientdata)
+#define SWIG_SetModule(clientdata, pointer)             SWIG_Matlab_SetModule(pointer);
 #define SWIG_MODULE_CLIENTDATA_TYPE void*
 
 #define Matlab_Error_Occurred() 0
 #define SWIG_Matlab_AddErrorMsg(msg) {;}
 
 SWIGRUNTIME swig_module_info *SWIG_Matlab_GetModule(void *clientdata);
-SWIGRUNTIME void SWIG_Matlab_SetModule(void *clientdata, swig_module_info *pointer);
+SWIGRUNTIME void SWIG_Matlab_SetModule(swig_module_info *pointer);
 
 /* For backward compatibility only */
 #define SWIG_POINTER_EXCEPTION  0
@@ -90,10 +90,73 @@ typedef struct SwigUnused {
 } SwigUnused;
 static SwigUnused *swigUnused=0;
 
+/* Get a pointer object
+   Returns a SwigPtr* with the object if successful, otherwise 0
+ */
+SwigPtr* SWIG_Matlab_GetPointer(size_t ind) {
+  if (ind==0 || ind>=swigPtrSize) {
+    return 0;
+  } else {
+    return swigPtr+ind;
+  }
+}
+
+/* Function pointer to SWIG_Matlab_GetPointer */
+typedef SwigPtr* (*SWIG_Matlab_GetPointerPtr)(size_t ind);
+
+SWIGRUNTIME SwigPtr* SWIG_Matlab_getSwigPtr(mxArray* pm, size_t *out_ind, int *external) {
+  char *buf;
+  size_t buflen;
+  SWIG_Matlab_GetPointerPtr getPointer = SWIG_Matlab_GetPointer;
+
+  /* Get module name */
+  mxArray *pm_mod = mxGetProperty(pm, 0, "swigMod");
+  if(!mxIsChar(pm_mod) || (mxGetM(pm_mod) != 1 ){
+    if(pm_mod) mxDestroyArray(pm_mod);
+    return 0;
+  }
+  buflen = mxGetN(pm_mod) + 1;
+  buf = mxMalloc(buflen);
+  if (mxGetString(pm_mod, buf, (mwSize)buflen)) {
+    mxDestroyArray(pm_mod);
+    mxFree(buf);
+    return 0;
+  }
+
+  /* Get function pointer if from another module."
+  if(strcmp(buf, SWIG_name_d) != 0)
+  {
+     mxArray *pm_output;
+     mxArray *pm_input = mxCreateDoubleScalar(3.0); /* Index 3 */
+     mxArray *ex = mexCallMATLABWithTrap(1, &pm_output, 1, &pm_input, buf);
+     if(ex) mexErrMsgIdAndTxt("SWIG:getSwigPtr","mexCallMATLABWithTrap failed for %s",buf);
+     getPointer = (SWIG_Matlab_GetPointerPtr)(*(uint64_T *)mxGetData(pm_output));
+     if (external) *external = 1;
+  } else {
+     if (external) *external = 0;
+  }
+  mxDestroyArray(pm_mod);
+  mxFree(buf);
+
+  /* Get index, represented as a uint64_T scalar */
+  mxArray *pm_ind = mxGetProperty(pm, 0, "swigInd");
+  if(!pm_ind || mxGetNumberOfElements(pm_ind) != 1 ||
+     mxGetClassID(pm_ind) != mxUINT64_CLASS || mxIsComplex(pm_ind)){
+    if(pm_ind) mxDestroyArray(pm_ind);
+    return 0;
+  }
+  size_t ind = (size_t)(*(uint64_T*)mxGetData(pm_ind));
+  if (out_ind) *out_ind = ind;
+  mxDestroyArray(pm_ind);
+
+  /* Get pointer object */
+  return getPointer(ind);
+}
+
 /* Add new pointer object to the memory allocator
    Returns the location of the new element by reference and a return flag by value.
  */
-int SWIG_Matlab_NewPointer(size_t* ind_ptr, void *ptr, swig_type_info *type, int own) {
+SWIGRUNTIME int SWIG_Matlab_NewPointer(size_t* ind_ptr, void *ptr, swig_type_info *type, int own) {
   /* Check input arguments */
   if (!ind_ptr || !type) return 1;
   size_t ind;
@@ -139,21 +202,10 @@ int SWIG_Matlab_NewPointer(size_t* ind_ptr, void *ptr, swig_type_info *type, int
   return 0;
 }
 
-/* Get a pointer object
-   Returns a SwigPtr* with the object if successful, otherwise 0
- */
-SwigPtr* SWIG_Matlab_GetPointer(size_t ind) {
-  if (ind==0 || ind>=swigPtrSize) {
-    return 0;
-  } else {
-    return swigPtr+ind;
-  }
-}
-
 /* Free pointer object
    Returns a void* with the object to be freed (if any)
  */
-void* SWIG_Matlab_DeletePointer(size_t ind) {
+SWIGRUNTIME void* SWIG_Matlab_DeletePointer(size_t ind) {
   /* Quick return if null pointer? */
   if (ind==0) return 0;
 
@@ -188,6 +240,15 @@ void SWIG_Matlab_ExitFcn(void) {
 
   /* Free allocated memory for pointers */
   if (swigPtr) {
+    /* Free any stray pointers if they exist */
+    for(size_t ii=1; ii<swigPtrSize; ++ii)
+    {
+        SwigPtr *temp = SWIG_Matlab_GetPointer(ii);
+        if(temp && temp->ptr) {
+          free(temp->ptr);
+          temp->ptr = 0;
+        }
+    }
     free(swigPtr);
     swigPtr=0;
     swigPtrSize=swigPtrNumAlloc=0;
@@ -224,18 +285,8 @@ SWIGRUNTIME mxArray* SWIG_Matlab_NewPointerObj(void *ptr, swig_type_info *type, 
 }
 
 SWIGRUNTIME int SWIG_Matlab_isOwned(mxArray* pm) {
-/* Get index, represented as a uint64_T scalar */
-  mxArray *pm_ind = mxGetProperty(pm, 0, "swigInd");
-  if(!pm_ind || mxGetNumberOfElements(pm_ind) != 1 ||
-     mxGetClassID(pm_ind) != mxUINT64_CLASS || mxIsComplex(pm_ind)){
-    if(pm_ind) mxDestroyArray(pm_ind);
-    return SWIG_ERROR;
-  }
-  size_t ind = (size_t)(*(uint64_T*)mxGetData(pm_ind));
-  mxDestroyArray(pm_ind);
-
   /* Get pointer object */
-  SwigPtr* p = SWIG_Matlab_GetPointer(ind);
+  SwigPtr* p = SWIG_Matlab_getSwigPtr(pm, 0, 0);
 
   if (!p) {
     return 0;
@@ -243,34 +294,12 @@ SWIGRUNTIME int SWIG_Matlab_isOwned(mxArray* pm) {
   return p->own;
 }
 
-SWIGRUNTIME SwigPtr* SWIG_Matlab_getSwigPtr(mxArray* pm) {
-/* Get index, represented as a uint64_T scalar */
-  mxArray *pm_ind = mxGetProperty(pm, 0, "swigInd");
-  if(!pm_ind || mxGetNumberOfElements(pm_ind) != 1 ||
-     mxGetClassID(pm_ind) != mxUINT64_CLASS || mxIsComplex(pm_ind)){
-    if(pm_ind) mxDestroyArray(pm_ind);
-    return 0;
-  }
-  size_t ind = (size_t)(*(uint64_T*)mxGetData(pm_ind));
-  mxDestroyArray(pm_ind);
-
-  /* Get pointer object */
-  return SWIG_Matlab_GetPointer(ind);
-}
-
 SWIGRUNTIME int SWIG_Matlab_ConvertPtrAndOwn(mxArray* pm, void **ptr, swig_type_info *type, int flags, int *own) {
-  /* Get index, represented as a uint64_T scalar */
-  mxArray *pm_ind = mxGetProperty(pm, 0, "swigInd");
-  if(!pm_ind || mxGetNumberOfElements(pm_ind) != 1 ||
-     mxGetClassID(pm_ind) != mxUINT64_CLASS || mxIsComplex(pm_ind)){
-    if(pm_ind) mxDestroyArray(pm_ind);
-    return SWIG_ERROR;
-  }
-  size_t ind = (size_t)(*(uint64_T*)mxGetData(pm_ind));
-  mxDestroyArray(pm_ind);
+  size_t ind = 0;
+  int external = 0;
 
   /* Get pointer object */
-  SwigPtr* p = SWIG_Matlab_GetPointer(ind);
+  SwigPtr* p = SWIG_Matlab_getSwigPtr(pm, &ind, &external);
   if (!p) {
     mexWarnMsgIdAndTxt("SWIG:ConvertPtrAndOwn", "No such element");
     return 0;
@@ -305,7 +334,11 @@ SWIGRUNTIME int SWIG_Matlab_ConvertPtrAndOwn(mxArray* pm, void **ptr, swig_type_
     
   /* Set ownership marker to false? */
   if(flags & SWIG_POINTER_DISOWN){
-    SWIG_Matlab_DeletePointer(ind);
+    if (!external) {
+      SWIG_Matlab_DeletePointer(ind);
+    } else {
+      mexErrMsgIdAndTxt("SWIG:ConvertPtrAndOwn","Attempting to delete an external pointer");
+    }
   }
 
   /* No type cast needed */
@@ -328,12 +361,28 @@ SWIGRUNTIME int SWIG_Matlab_ConvertPtrAndOwn(mxArray* pm, void **ptr, swig_type_
   return SWIG_OK;
 }
 
-SWIGRUNTIME swig_module_info *SWIG_Matlab_GetModule(void *clientdata) {
+SWIGRUNTIME swig_module_info *SWIG_Matlab_GetModule(void *SWIGUNUSEDPARM(clientdata)) {
   swig_module_info *pointer = 0;
+  mxArray *module = mexGetVariable("global", "swig_runtime_data_type_pointer" SWIG_RUNTIME_VERSION SWIG_TYPE_TABLE_NAME);
+  if (module){
+    pointer = (swig_module_info *)(*(uint64_T *)mxGetData(module));
+    mxDestroyArray(module);
+  }
   return pointer;
 }
 
-SWIGRUNTIME void SWIG_Matlab_SetModule(void *clientdata, swig_module_info *pointer) {
+SWIGRUNTIME void SWIG_Matlab_SetModule(swig_module_info *pointer) {
+  mxArray *module = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);
+  if(!module) mexErrMsgIdAndTxt("SWIG:SetModule","mxCreateNumericMatrix failed");
+  *(uint64_T *)mxGetData(module) = (uint64_T)pointer;
+  int status;
+  /* Put variable in MATLAB global workspace */
+  status=mexPutVariable("global", "swig_runtime_data_type_pointer" SWIG_RUNTIME_VERSION SWIG_TYPE_TABLE_NAME, module);
+  if (status==1){
+    mexErrMsgIdAndTxt("SWIG:SetModule",
+      "Could not put variable in global workspace.\n");
+  }
+  mxDestroyArray(module);
 }
 
 /* HACK HACK */
