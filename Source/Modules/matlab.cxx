@@ -471,7 +471,7 @@ int MATLAB::top(Node *n) {
   // Return swigPtr
   Printf(f_begin,"  SWIG_Matlab_GetPointerPtr getPointer = SWIG_Matlab_GetPointer;\n");
   Printf(f_begin,"  *resv = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);\n");
-  Printf(f_begin,"  *(uint64_T *)mxGetData(resv) = (uint64_T)getPointer;\n");
+  Printf(f_begin,"  *(uint64_T *)mxGetData(*resv) = (uint64_T)getPointer;\n");
   Printf(f_begin,"  return 0;\n");
   Printf(f_begin,"}\n\n");
 

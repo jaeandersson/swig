@@ -111,19 +111,19 @@ SWIGRUNTIME SwigPtr* SWIG_Matlab_getSwigPtr(mxArray* pm, size_t *out_ind, int *e
 
   /* Get module name */
   mxArray *pm_mod = mxGetProperty(pm, 0, "swigMod");
-  if(!mxIsChar(pm_mod) || (mxGetM(pm_mod) != 1 ){
+  if(!mxIsChar(pm_mod) || (mxGetM(pm_mod) != 1)){
     if(pm_mod) mxDestroyArray(pm_mod);
     return 0;
   }
   buflen = mxGetN(pm_mod) + 1;
-  buf = mxMalloc(buflen);
+  buf = (char *)mxMalloc(buflen);
   if (mxGetString(pm_mod, buf, (mwSize)buflen)) {
     mxDestroyArray(pm_mod);
     mxFree(buf);
     return 0;
   }
 
-  /* Get function pointer if from another module."
+  /* Get function pointer if from another module */
   if(strcmp(buf, SWIG_name_d) != 0)
   {
      mxArray *pm_output;
