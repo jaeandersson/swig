@@ -122,20 +122,24 @@ SWIGRUNTIME SwigPtr* SWIG_Matlab_getSwigPtr(mxArray* pm, size_t *out_ind, int *e
     mxFree(buf);
     return 0;
   }
+  mxDestroyArray(pm_mod);
 
   /* Get function pointer if from another module */
   if(strcmp(buf, SWIG_name_d) != 0)
   {
-     mxArray *pm_output;
-     mxArray *pm_input = mxCreateDoubleScalar(3.0); /* Index 3 */
-     mxArray *ex = mexCallMATLABWithTrap(1, &pm_output, 1, &pm_input, buf);
-     if(ex) mexErrMsgIdAndTxt("SWIG:getSwigPtr","mexCallMATLABWithTrap failed for %s",buf);
-     getPointer = (SWIG_Matlab_GetPointerPtr)(*(uint64_T *)mxGetData(pm_output));
+     mxArray *pm_ptr = mxGetProperty(pm, 0, "swigPtr");
+     if(!pm_ptr || mxGetNumberOfElements(pm_ptr) != 1 ||
+        mxGetClassID(pm_ptr) != mxUINT64_CLASS || mxIsComplex(pm_ptr)){
+       if(pm_ptr) mxDestroyArray(pm_ptr);
+       mxFree(buf);
+       return 0;
+     }
+     getPointer = (SWIG_Matlab_GetPointerPtr)(*(uint64_T *)mxGetData(pm_ptr));
      if (external) *external = 1;
+     mxDestroyArray(pm_ptr);
   } else {
      if (external) *external = 0;
   }
-  mxDestroyArray(pm_mod);
   mxFree(buf);
 
   /* Get index, represented as a uint64_T scalar */
