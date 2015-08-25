@@ -187,9 +187,6 @@ SWIGRUNTIME int SWIG_Matlab_NewPointer(size_t* ind_ptr, void *ptr, swig_type_inf
     ind = swigPtrSize++;
   }
 
-  /* Increase lock count */
-  mexLock();
-
   /* Initialize object */
   SwigPtr *obj = swigPtr + ind;
   obj->ptr = ptr;
@@ -215,9 +212,6 @@ SWIGRUNTIME void* SWIG_Matlab_DeletePointer(size_t ind) {
     mexWarnMsgIdAndTxt("SWIG:DeletePointer", "No such element");
     return 0;
   }
-
-  /* Decrease lock count */
-  mexUnlock();
 
   /* Add to list of unused elements */
   void* ret = p->own ? p->ptr : 0;
