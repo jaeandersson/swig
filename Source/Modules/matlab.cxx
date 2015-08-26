@@ -471,6 +471,7 @@ int MATLAB::top(Node *n) {
   // Return swigPtr
   Printf(f_begin,"  SWIG_Matlab_GetPointerPtr getPointer = SWIG_Matlab_GetPointer;\n");
   Printf(f_begin,"  *resv = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);\n");
+  Printf(f_begin,"  if(!*resv) mexErrMsgIdAndTxt(\"SWIG:swigModulePtr","mxCreateNumericMatrix failed\");");
   Printf(f_begin,"  *(uint64_T *)mxGetData(*resv) = (uint64_T)getPointer;\n");
   Printf(f_begin,"  return 0;\n");
   Printf(f_begin,"}\n\n");
@@ -2352,7 +2353,6 @@ void MATLAB::wrapConstructor(int gw_ind, String *symname, String *fullname, Node
     } else {
       if (have_matlabprepend(n))
         Printf(f_wrap_m, "%s\n",matlabprepend(n));
-      Printf(f_wrap_m,"        self.swigMod = '%s';\n", pkg_name);
       Printf(f_wrap_m,"        self.swigPtr = %s(%d);\n", mex_fcn, 3); // index for swigModulePtr()
       Printf(f_wrap_m,"        self.swigInd = %s(%d, varargin{:});\n", mex_fcn, gw_ind);
       if (have_matlabappend(n))
@@ -2371,7 +2371,6 @@ void MATLAB::wrapConstructorDirector(int gw_ind, String *symname, String *fullna
     } else {
       if (have_matlabprepend(n))
         Printf(f_wrap_m, "%s\n",matlabprepend(n));
-      Printf(f_wrap_m,"        self.swigMod = '%s';\n", pkg_name);
       Printf(f_wrap_m,"        self.swigPtr = %s(%d);\n", mex_fcn, 3); // index for swigModulePtr()
       Printf(f_wrap_m,"        if strcmp(class(self),'director_basic.%s')\n", symname);
       Printf(f_wrap_m,"          self.swigInd = %s(%d, 0, varargin{:});\n", mex_fcn, gw_ind);
@@ -2671,11 +2670,10 @@ void MATLAB::createSwigRef() {
   Printf(f_wrap_m,"  properties \n");
   Printf(f_wrap_m,"    swigPtr\n");
   Printf(f_wrap_m,"    swigInd\n");
-  Printf(f_wrap_m,"    swigMod\n");
   Printf(f_wrap_m,"  end\n");
   Printf(f_wrap_m,"  methods\n");
   Printf(f_wrap_m,"    function disp(self)\n");
-  Printf(f_wrap_m,"      disp(sprintf('<Swig object, mod=%%s, ptr=%%d, ind=%%d>',self.swigMod,self.swigPtr,self.swigInd))\n");
+  Printf(f_wrap_m,"      disp(sprintf('<Swig object, ptr=%%d, ind=%%d>',self.swigPtr,self.swigInd))\n");
   Printf(f_wrap_m,"    end\n");
   Printf(f_wrap_m,"    function varargout = subsref(self,s)\n");
   Printf(f_wrap_m,"      if numel(s)==1\n");
