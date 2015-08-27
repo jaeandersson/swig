@@ -43,6 +43,7 @@ public:
   virtual int memberconstantHandler(Node *n);
   virtual int staticmembervariableHandler(Node *n);
   virtual int insertDirective(Node *n);
+  virtual int importDirective(Node *n);
   int classDirectorMethods(Node *n);
   int classDirectorMethod(Node *n, Node *parent, String *super);
   int classDirectorConstructor(Node *n);
@@ -73,6 +74,7 @@ protected:
   String* set_field;
   String* static_methods;
   String* setup_name;
+  String* setup_imports;
 
   // Current constant
   int con_id;
@@ -151,6 +153,7 @@ MATLAB::MATLAB() :
   set_field(0),
   static_methods(0),
   setup_name(0),
+  setup_imports(0),
   have_constructor(false),
   have_destructor(false),
   num_gateway(0),
@@ -260,6 +263,11 @@ int MATLAB::top(Node *n) {
           allow_directors();
           if (dirprot)
             allow_dirprot();
+        }
+        // Set package name via module option if not set via command-line
+        // Otherwise use module name as default (see below)
+        if (!pkg_name && Getattr(options, "package")) {
+            pkg_name = Getattr(options, "package");
         }
       }
     }
@@ -463,7 +471,7 @@ int MATLAB::top(Node *n) {
   Printf(f_begin,"  }\n");
 
   // Make sure one output
-  Printf(f_begin,"  if (resc!=1) {\n");
+  Printf(f_begin,"  if (resc>1) {\n");
   Printf(f_begin,"    mexWarnMsgIdAndTxt(\"SWIG:RuntimeError\", \"The function should have one output.\");\n");
   Printf(f_begin,"    return 1;\n");
   Printf(f_begin,"  }\n");
@@ -471,7 +479,7 @@ int MATLAB::top(Node *n) {
   // Return swigPtr
   Printf(f_begin,"  SWIG_Matlab_GetPointerPtr getPointer = SWIG_Matlab_GetPointer;\n");
   Printf(f_begin,"  *resv = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);\n");
-  Printf(f_begin,"  if(!*resv) mexErrMsgIdAndTxt(\"SWIG:swigModulePtr","mxCreateNumericMatrix failed\");");
+  Printf(f_begin,"  if(!*resv) mexErrMsgIdAndTxt(\"SWIG:RuntimeError\",\"mxCreateNumericMatrix failed\");\n");
   Printf(f_begin,"  *(uint64_T *)mxGetData(*resv) = (uint64_T)getPointer;\n");
   Printf(f_begin,"  return 0;\n");
   Printf(f_begin,"}\n\n");
@@ -709,12 +717,30 @@ String *matlabappend(Node *n) {
   return str;
 }
 
-// virtual int importDirective(Node *n) {
-//   String *modname = Getattr(n, "module");
-//   if (modname)
-//     Printf(f_init, "if (!SWIG_Matlab_LoadModule(\"%s\")) return false;\n", modname);
-//   return Language::importDirective(n);
-// }
+int MATLAB::importDirective(Node *n) {
+  String *modname = Getattr(n, "module");
+
+  if (modname) {
+    // Find the module node for this imported module.  It should be the
+    // first child but search just in case.
+    Node *mod = firstChild(n);
+    while (mod && Strcmp(nodeType(mod), "module") != 0)
+      mod = nextSibling(mod);
+
+    Node *options = Getattr(mod, "options");
+    String *pkg = options ? Getattr(options, "package") : 0;
+    if (pkg == 0) pkg = modname;
+    if (Strcmp(pkg, pkg_name) != 0) {
+      if(!setup_imports) setup_imports = NewString("");
+      String *import_name = NewString("");
+      Append(import_name, pkg);
+      Append(import_name, "setup");
+      Printf(setup_imports, "%s\n", import_name);
+      Delete(import_name);
+    }
+  }
+  return Language::importDirective(n);
+}
 
 // const char *get_implicitconv_flag(Node *n) {
 //   int conv = 0;
@@ -2455,6 +2481,7 @@ int MATLAB::destructorHandler(Node *n) {
   // each class in the hierarchy. This isn't the case for C++ which only calls the
   // destructor of the "leaf-class", which should take care of deleting everything.
   Printf(f_wrap_m,"        self.swigInd=uint64(0);\n");
+  Printf(f_wrap_m,"        self.swigPtr=uint64(0);\n");
   Printf(f_wrap_m,"      end\n");
   Printf(f_wrap_m,"    end\n");
 
@@ -2735,10 +2762,14 @@ void MATLAB::createSetupScript() {
 }
 
 void MATLAB::finalizeSetupScript() {
+  Printf(f_setup_m,"%s(%d);\n", mex_fcn, 3); // index for swigModulePtr()
+  Printf(f_setup_m,"%s", setup_imports);
   Delete(f_setup_m);
   f_setup_m = 0;
   Delete(setup_name);
   setup_name = 0;
+  Delete(setup_imports);
+  setup_imports = 0;
 }
 
 const char* MATLAB::get_implicitconv_flag(Node *n) {

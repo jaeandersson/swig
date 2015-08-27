@@ -98,12 +98,12 @@ SwigPtr* SWIG_Matlab_GetNullPointer(size_t SWIGUNUSEDPARM(ind), int SWIGUNUSEDPA
 /* Get a pointer object
    Returns a SwigPtr* with the object if successful, otherwise 0
  */
-SwigPtr* SWIG_Matlab_GetPointer(size_t ind, int delete) {
+SwigPtr* SWIG_Matlab_GetPointer(size_t ind, int del) {
   if (ind==0 || ind>=swigPtrSize) {
     return 0;
   } else {
     SwigPtr *p = swigPtr+ind;
-    if (delete) {
+    if (del) {
       /* Add to list of unused elements */
       p->ptr=0;
       p->type=0;
@@ -119,7 +119,7 @@ SwigPtr* SWIG_Matlab_GetPointer(size_t ind, int delete) {
 }
 
 /* Function pointer to SWIG_Matlab_GetPointer */
-typedef SwigPtr* (*SWIG_Matlab_GetPointerPtr)(size_t ind, int delete);
+typedef SwigPtr* (*SWIG_Matlab_GetPointerPtr)(size_t ind, int del);
 
 SWIGRUNTIME SwigPtr* SWIG_Matlab_getSwigPtr(mxArray* pm) {
   SWIG_Matlab_GetPointerPtr getPointer = SWIG_Matlab_GetNullPointer;
@@ -143,6 +143,9 @@ SWIGRUNTIME SwigPtr* SWIG_Matlab_getSwigPtr(mxArray* pm) {
   }
   size_t ind = (size_t)(*(uint64_T*)mxGetData(pm_ind));
   mxDestroyArray(pm_ind);
+
+  /* Return if null pointer? */
+  if (ind==0 || getPointer==0) return 0;
 
   /* Get pointer object */
   return getPointer(ind, 0);
@@ -221,7 +224,7 @@ SWIGRUNTIME void* SWIG_Matlab_DeletePointer(mxArray* pm) {
   mxDestroyArray(pm_ind);
 
   /* Return if null pointer? */
-  if (ind==0) return 0;
+  if (ind==0 || getPointer==0) return 0;
 
   /* Get pointer */
   SwigPtr* p = getPointer(ind, 1);
@@ -332,7 +335,7 @@ SWIGRUNTIME mxArray* SWIG_Matlab_NewPointerObj(void *ptr, swig_type_info *type, 
 
 SWIGRUNTIME int SWIG_Matlab_isOwned(mxArray* pm) {
   /* Get pointer object */
-  SwigPtr* p = SWIG_Matlab_getSwigPtr(pm, 0, 0);
+  SwigPtr* p = SWIG_Matlab_getSwigPtr(pm);
 
   if (!p) {
     return 0;
