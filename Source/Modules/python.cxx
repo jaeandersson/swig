@@ -2577,7 +2577,7 @@ public:
 	     "\"Wrong number or type of arguments for overloaded function '%s'.\\n\""
 	     "\n\"  Possible prototypes are:\\n\"\n%s"
 	     "\n\"  You have: \" +  (res_char ? std::string(res_char) : \"\") + \"\\n\";\n", symname, protoTypes);
-      Printf(f->code, "if (res_char) SWIG_Python_str_DelForPy3(res_char);\n");
+      Printf(f->code, "if (res_char) { SWIG_Python_str_DelForPy3(res_char); }\n");
       Printf(f->code, "SWIG_SetErrorMsg(PyExc_NotImplementedError, error_str.c_str());\n");
 	     
       Printf(f->code, "return %s;\n", builtin_ctor ? "-1" : "0");
@@ -3231,7 +3231,7 @@ public:
         "\"Wrong number or type of arguments for function '%s'.\\n\""
         "\n\"  Prototype:\\n\"\n%s"
         "\n\"  You have: \" +  (res_char ? std::string(res_char) : \"\") + \"\\n\";\n", iname, protoType);
-      Printf(f->code, "if (res_char) SWIG_Python_str_DelForPy3(res_char);\n");
+      Printf(f->code, "if (res_char) { SWIG_Python_str_DelForPy3(res_char); }\n");
       Printf(f->code, "SWIG_SetErrorMsg(PyExc_NotImplementedError, error_str.c_str());\n");
     }
     
