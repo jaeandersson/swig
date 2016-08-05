@@ -401,6 +401,19 @@ SWIGRUNTIME void SWIG_Matlab_SetModule(swig_module_info *pointer) {
 /* HACK HACK */
 #define SWIG_Matlab_SetConstant(dummy1,dummy2,pm) (pm)
 
+/* Convert Matlab arguments to a type description
+ *
+ * You must call SWIG_Python_str_DelForPy3() on the result after usage
+*/
+SWIGRUNTIME const char*
+SWIG_Matlab_ArgsTypeDesc(int argc, mxArray *argv[]) {
+  mxArray* mem = 0;
+  const char* type_name = 0;
+  int flag = mexCallMATLAB(1, &mem, argc, argv, "SwigType");
+  if (!flag && mxIsChar(mem)) type_name = mxArrayToString(mem);
+  return type_name;
+}
+
 #ifdef __cplusplus
 #include <streambuf>
 #include <iostream>

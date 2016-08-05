@@ -626,6 +626,7 @@ int MATLAB::top(Node *n) {
 void MATLAB::process_autodoc(Node *n) {
   String *str = Getattr(n, "feature:docstring");
   bool autodoc_enabled = !Cmp(Getattr(n, "feature:autodoc"), "1");
+  bool customdoc_enabled = !Cmp(Getattr(n, "feature:customdoc"), "1");
   Setattr(n, "matlab:synopsis", NewString(""));
   Setattr(n, "matlab:decl_info", NewString(""));
   Setattr(n, "matlab:cdecl_info", NewString(""));
@@ -636,7 +637,16 @@ void MATLAB::process_autodoc(Node *n) {
   //    String *cdecl_info = Getattr(n, "matlab:cdecl_info");
   String *args_info = Getattr(n, "matlab:args_info");
 
-  if (autodoc_enabled) {
+  if (customdoc_enabled) {
+    String *decl_str = NewString("");
+    String *args_str = NewString("");
+    int maxargs=0;
+    String *full_str = Swig_document_function(n);
+    Append(decl_info, full_str);
+    Delete(decl_str);
+    Delete(args_str);
+    Delete(full_str);
+  } else if (autodoc_enabled) {
     String *decl_str = NewString("");
     String *args_str = NewString("");
     make_autodocParmList(n, decl_str, args_str);
@@ -671,7 +681,7 @@ void MATLAB::process_autodoc(Node *n) {
     }
 
     // emit into synopsis section
-    Append(synopsis, str);
+    if (!customdoc_enabled) Append(synopsis, str);
   }
 }
 
@@ -1155,6 +1165,24 @@ int MATLAB::functionWrapper(Node *n) {
 
   Printf(f->code, "return 0;\n");
   Printf(f->code, "fail:\n");
+
+  bool customdoc = checkAttribute(n, "feature:customdoc", "1");
+
+  if (customdoc) {
+    String *protoType = NewString("");
+    Printf(protoType, "    \"    ");
+    Swig_prototype(n,protoType, "style_error");
+    Printf(protoType, "\\n\"\n");
+
+    Printf(f->code, "if (SWIG_lasterror_code == SWIG_TypeError) {\n");
+    Printf(f->code, "const char* type_name = SWIG_Matlab_ArgsTypeDesc(argc, argv);\n");
+    Printf(f->code, "SWIG_Error(SWIG_RuntimeError, \"No matching function for overload function '%s'.\"\n", Getattr(n, "sym:name"));
+    Printf(f->code, "   \"  Prototype:\\n\"\n%s\n     \"  You have: %%s\\n\", type_name);\n",protoType);
+    Printf(f->code, "}\n");
+
+    Delete(protoType);
+  }
+
   Printv(f->code, cleanup, NIL);
   Printf(f->code, "return 1;\n");
   Printf(f->code, "}\n");
@@ -2185,6 +2213,11 @@ int MATLAB::classHandler(Node *n) {
 }
 
 int MATLAB::memberfunctionHandler(Node *n) {
+#ifdef MATLABPRINTFUNCTIONENTRY
+  Printf(stderr,"Entering memberfunctionHandler\n");
+#endif
+
+
   // Emit C wrappers
   int flag = Language::memberfunctionHandler(n);
   if (flag != SWIG_OK)
@@ -2399,6 +2432,7 @@ int MATLAB::membervariableHandler(Node *n) {
 
 void MATLAB::wrapConstructor(int gw_ind, String *symname, String *fullname, Node *n) {
   Printf(f_wrap_m, "    function self = %s(varargin)\n", symname);
+  autodoc_to_m(f_wrap_m, n);
   Printf(f_wrap_m, "%s", base_init);
   Printf(f_wrap_m, "      if nargin==1 && strcmp(class(varargin{1}),'SwigRef')\n");
   Printf(f_wrap_m, "        if ~isnull(varargin{1})\n");
@@ -2425,6 +2459,7 @@ void MATLAB::wrapConstructor(int gw_ind, String *symname, String *fullname, Node
 void MATLAB::wrapConstructorDirector(int gw_ind, String *symname, String *fullname, Node *n) {
   Printf(f_wrap_m, "    function self = %s(varargin)\n", symname);
   Printf(f_wrap_m, "%s", base_init);
+  autodoc_to_m(f_wrap_m, n);
   Printf(f_wrap_m, "      if nargin==1 && strcmp(class(varargin{1}),'SwigRef')\n");
   Printf(f_wrap_m, "        if ~isnull(varargin{1})\n");
   Printf(f_wrap_m, "          self.swigPtr = varargin{1}.swigPtr;\n");
@@ -2873,20 +2908,33 @@ void MATLAB::dispatchFunction(Node *n) {
   String *dispatch = Swig_overload_dispatch(n, "return %s(resc,resv,argc,argv);", &maxargs);
   String *tmp = NewString("");
 
-  Node *sibl = n;
-  while (Getattr(sibl, "sym:previousSibling"))
-    sibl = Getattr(sibl, "sym:previousSibling"); // go all the way up
-  String *protoTypes = NewString("");
-  do {
-    String *fulldecl = Swig_name_decl(sibl);
-    Printf(protoTypes, "\n\"    %s\\n\"", fulldecl);
-    Delete(fulldecl);
-  } while ((sibl = Getattr(sibl, "sym:nextSibling")));
+  bool customdoc = checkAttribute(n, "feature:customdoc", "1");
+
+  String *protoTypes;
+  if (customdoc) {
+    protoTypes = Swig_prototypes_error(n);
+  } else {
+    Node *sibl = n;
+    while (Getattr(sibl, "sym:previousSibling"))
+      sibl = Getattr(sibl, "sym:previousSibling");        // go all the way up
+    protoTypes = NewString("");
+    do {
+      String *fulldecl = Swig_name_decl(sibl);
+      Printf(protoTypes, "\n\"    %s\\n\"", fulldecl);
+      Delete(fulldecl);
+    } while ((sibl = Getattr(sibl, "sym:nextSibling")));
+  }
 
   Printf(f->def, "int %s(int resc, mxArray *resv[], int argc, mxArray *argv[]) {", wname);
   Printv(f->code, dispatch, "\n", NIL);
+
+  if (customdoc) Printf(f->code, "const char* type_name = SWIG_Matlab_ArgsTypeDesc(argc, argv);\n");
   Printf(f->code, "SWIG_Error(SWIG_RuntimeError, \"No matching function for overload function '%s'.\"\n", iname);
-  Printf(f->code, "   \"  Possible C/C++ prototypes are:\\n\"%s);\n", protoTypes);
+  if (customdoc) {
+    Printf(f->code, "   \"  Possible prototypes are:\\n\"\n%s\n     \"  You have: %%s\\n\", type_name);\n", protoTypes);
+  } else {
+    Printf(f->code, "   \"  Possible C/C++ prototypes are:\\n\"%s);\n", protoTypes);
+  }
   Printf(f->code, "return 1;\n");
   Printv(f->code, "}\n", NIL);
 
@@ -2895,6 +2943,7 @@ void MATLAB::dispatchFunction(Node *n) {
   DelWrapper(f);
   Delete(dispatch);
   Delete(wname);
+  Delete(protoTypes);
 }
 
 // this function is used on autodoc strings

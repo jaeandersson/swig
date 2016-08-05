@@ -1770,6 +1770,29 @@ SWIG_Python_MustGetPtr(PyObject *obj, swig_type_info *ty, int SWIGUNUSEDPARM(arg
   return result;
 }
 
+/* Convert Python arguments to a type description
+ *
+ * You must call SWIG_Python_str_DelForPy3() on the result after usage
+*/
+SWIGRUNTIME const char*
+SWIG_Python_ArgsTypeDesc(PyObject* args) {
+  const char *res_char = 0;
+  PyObject* module = PyImport_AddModule(SWIG_module_name);
+  PyObject* dict = PyModule_GetDict(module);
+  PyObject* fun = PyDict_GetItemString(dict, (char*)"swigtypeconvertor");
+  if (fun && PyCallable_Check(fun)) {
+    PyObject* res = PyObject_CallObject(fun, args);
+    PyObject* res_str = PyObject_Repr(res);
+    res_char = SWIG_Python_str_AsChar(res_str);
+
+    Py_DECREF(res_str);
+    Py_DECREF(res);
+    Py_DECREF(fun);
+  }
+  Py_DECREF(dict);
+  return res_char;
+}
+
 #ifdef SWIGPYTHON_BUILTIN
 SWIGRUNTIME int
 SWIG_Python_NonDynamicSetAttr(PyObject *obj, PyObject *name, PyObject *value) {

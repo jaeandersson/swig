@@ -3846,3 +3846,244 @@ Hash *Language::getClassHash() const {
   return classhash;
 }
 
+
+DOH * Getattr_specific(Node* n, const DOHString_or_char* name, const DOHString_or_char* suffix) {
+  String* s_name = NewString(name);
+  
+  String* composed_name = Copy(s_name);
+  Printf(composed_name, ":%s", suffix);
+  DOH * ret = Getattr(n, composed_name);
+  Delete(composed_name);
+  if (ret) return ret;
+  return Getattr(n, s_name);
+}
+
+DOH * Getattr_specific(Node* n, const DOHString_or_char* name, const DOHString_or_char* suffix, const DOHString_or_char* suffix2) {
+  String* s_name = NewString(name);
+  
+  String* composed_name = Copy(s_name);
+  Printf(composed_name, ":%s:%s", suffix, suffix2);
+  DOH * ret = Getattr(n, composed_name);
+  Delete(composed_name);
+  if (ret) return ret;
+  composed_name = Copy(s_name);
+  Printf(composed_name, ":%s", suffix);
+  ret = Getattr(n, composed_name);
+  Delete(composed_name);
+  if (ret) return ret;
+  composed_name = Copy(s_name);
+  Printf(composed_name, ":%s", suffix2);
+  ret = Getattr(n, composed_name);
+  Delete(composed_name);
+  if (ret) return ret;
+  return Getattr(n, s_name);
+}
+
+
+void Language::Swig_prototype(Node *n, String* f, const DOHString_or_char* style) {
+    String* name = Swig_symname(n);
+  String* NAME = Swig_string_upper(name);
+
+  populate_docParmList(n);
+  
+  String * args_in = NewString("");
+  String * args_out = NewString("");
+  
+  String * s_style = NewString(style);
+
+  String *normal_entry_in = Getattr_specific(n, "feature:customdoc:arg:normal", "in", s_style);
+  String *only_entry_in = Getattr_specific(n, "feature:customdoc:arg:only", "in", s_style);
+  String *no_name_in = Getattr_specific(n, "feature:customdoc:arg:noname", "in", s_style);
+  String *separator_in = Getattr_specific(n, "feature:customdoc:arg:separator", "in", s_style);
+
+  String *normal_entry_out = Getattr_specific(n, "feature:customdoc:arg:normal", "out", s_style);
+  String *only_entry_out = Getattr_specific(n, "feature:customdoc:arg:only", "out", s_style);
+  String *no_name_out = Getattr_specific(n, "feature:customdoc:arg:noname", "out", s_style);
+  String *separator_out = Getattr_specific(n, "feature:customdoc:arg:separator", "out", s_style);
+
+  String *self = Getattr_specific(n, "feature:customdoc:arg:self", s_style);
+  
+  format_paramlist(args_in, Getattr(n, "paramlist:in"), normal_entry_in, only_entry_in, no_name_in, self, separator_in);
+  format_paramlist(args_out, Getattr(n, "paramlist:out"), normal_entry_out, only_entry_out, no_name_out, 0, separator_out);
+
+  int num_out = Len(Getattr(n, "paramlist:out"));
+  
+  String *proto;
+  
+  if (checkAttribute(n, "nodeType", "constructor")) {
+    proto = Getattr_specific(n, "feature:customdoc:proto", "constructor", s_style);
+  } else if (num_out==0) {
+    proto = Getattr_specific(n, "feature:customdoc:proto", "void", s_style);
+  } else if (num_out==1) {
+    proto = Getattr_specific(n, "feature:customdoc:proto", "single_out", s_style);
+  } else {
+    proto = Getattr_specific(n, "feature:customdoc:proto", "normal", s_style);
+  }
+  
+  Replaceall(proto, "$name", name);
+  Replaceall(proto, "$NAME", NAME);
+  Replaceall(proto, "$in", args_in);
+  Replaceall(proto, "$out", args_out);
+  
+  Printf(f, "%s", proto);
+  
+  Delete(args_in);
+  Delete(args_out);  
+}
+
+String *Language::Swig_prototypes_error(Node *n) {
+
+  int i, j;
+
+  String *f = NewString("");
+
+  /* Get a list of methods ranked by precedence values and argument count */
+  List *dispatch = Swig_overload_rank(n, true);
+  int nfunc = Len(dispatch);
+  if (nfunc==0) {
+    dispatch = NewList();
+    Append(dispatch, n);
+    nfunc = 1;
+  }
+  
+  /* Loop over the functions */
+  for (i = 0; i < nfunc; i++) {
+    Node *ni = Getitem(dispatch, i);
+    Printf(f, "    \"");
+    String * proto = NewString("");
+    Swig_prototype(ni, proto, "style_error");
+    String * line = Copy(Getattr_specific(n, "feature:customdoc:protoline", "style_error"));
+    Replaceall(line, "$proto", proto);
+    Printf(f, "%s", line);
+    Printf(f, "\\n\"\n");
+  }
+  Delete(dispatch);
+  return f;
+}
+
+String *Language::Swig_document_function(Node *n) {
+
+  int i, j;
+
+  String *f = NewString("");
+
+  /* Get a list of methods ranked by precedence values and argument count */
+  List *dispatch = Swig_overload_rank(n, true);
+  int nfunc = Len(dispatch);
+  if (nfunc==0) {
+    dispatch = NewList();
+    Append(dispatch, n);
+  }
+
+  bool has_self = Getattr(n, "memberfunctionHandler:sym:name");
+
+  String* main_brief = NewString("");
+  String* main_doc = NewString("");
+  Swig_doc_split(Getattr(n, "feature:docstring"), main_brief, main_doc);
+  
+  String* name = Swig_symname(n);
+  String* NAME = Swig_string_upper(name);
+  
+  String* main = Copy(Getattr(n,"feature:customdoc:main"));
+  
+  Replaceall(main, "$name", name);
+  Replaceall(main, "$NAME", NAME);
+  Replaceall(main, "$brief", main_brief);
+  
+  String* t_overview_nobrief = Copy(Getattr_specific(n,"feature:customdoc:protoline","nobrief","style_overview"));
+  String* t_overview_brief = Copy(Getattr_specific(n,"feature:customdoc:protoline","style_overview"));
+  
+  String * overview = NewString("");
+  if (!checkAttribute(n, "kind", "class")) {
+    // Loop over overloaded functions
+    for (i = 0; i < Len(dispatch); i++) {
+      Node *ni = Getitem(dispatch, i);
+      //   int res = FOO(int bar)
+      String * local_brief = NewString("");
+      Swig_doc_split(Getattr(ni, "feature:docstring"), local_brief, 0);
+      bool has_brief = local_brief && main_brief && Strcmp(main_brief, local_brief)!=0;
+      String * overview_line = has_brief ? Copy(t_overview_brief) : Copy(t_overview_nobrief);
+      Replaceall(overview_line, "$brief", local_brief);
+
+      String* proto = NewString("");
+      Swig_prototype(ni, proto, "overview");
+      Replaceall(overview_line, "$proto", proto);
+    
+      Printf(overview, "%s\n", overview_line);
+    }
+  }
+  
+  
+  Replaceall(main, "$overview", overview);
+  Replaceall(main, "$main", main_doc);
+  
+  Printf(f, "%s", main);
+  
+  String* t_group_line = Getattr_specific(n,"feature:customdoc:protoline","style_group");
+  String* t_group = Getattr(n,"feature:customdoc:group");
+
+  if (!checkAttribute(n, "kind", "class")) {
+    // Collect all prototypes String docstring->List node
+    // Make unique list of expressions
+    // Group descriptions together
+    Hash *doc_node = NewHash();
+    
+    int n_fragments = 0;
+    for (i = 0; i < nfunc; i++) {
+      Node *ni = Getitem(dispatch, i);
+      
+      String* doc = Getattr(ni, "feature:docstring");
+      if (doc) {
+          doc = Copy(doc);
+      } else {
+          doc = NewString("");
+      }
+      List* matches = Getattr(doc_node, doc);
+      if (matches) {
+          Append(matches, ni);
+      } else {
+          List *node_list = NewList();
+          Append(node_list, ni);
+          Setattr(doc_node, doc, node_list);
+          n_fragments++;
+      }
+      Delete(doc);
+    }
+    
+    bool multi_fragment = n_fragments>1;
+
+    if (multi_fragment) {
+      // Loop over all fragments
+      Iterator k;
+      for (k = First(doc_node); k.key; k = Next(k)) {
+        String* doc = k.key;
+        List* prototypes = Getattr(doc_node, doc);
+        
+        String* group_lines = NewString("");
+        for (i = 0; i < Len(prototypes); i++) {
+          Node *ni = Getitem(prototypes, i);
+          
+          String * group_line = Copy(t_group_line);
+          
+          String* proto = NewString("");
+          Swig_prototype(ni, proto, "style_group");
+      
+          Replaceall(group_line, "$proto", proto);
+
+          Printf(group_lines, "%s\n", group_line);
+          Delete(group_line);
+        }
+        String * group = Copy(t_group);
+        Replaceall(group, "$group", group_lines);
+        Replaceall(group, "$main", doc);
+        Printf(f, "%s", group);
+        Delete(group);
+      }
+    }
+  }
+  
+  Delete(dispatch);
+  Delete(main_brief);
+  Delete(main_doc);
+  return f;
+}

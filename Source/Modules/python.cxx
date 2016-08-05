@@ -753,6 +753,8 @@ public:
     module = Copy(Getattr(n, "name"));
     mainmodule = Getattr(n, "name");
 
+    Printf(f_runtime, "#define SWIG_module_name    \"%s\"\n", module);
+
     if (directorsEnabled()) {
       Swig_banner(f_directors_h);
       Printf(f_directors_h, "\n");
@@ -1645,6 +1647,7 @@ public:
     String *str = Getattr(n, "feature:docstring");
     bool have_ds = (str && Len(str) > 0);
     bool have_auto = (Getattr(n, "feature:autodoc") && !GetFlag(n, "feature:noautodoc"));
+    bool customdoc = checkAttribute(n, "feature:customdoc", "1");
     const char *triple_double = use_triple ? "\"\"\"" : "";
     String *autodoc = NULL;
     String *doc = NULL;
@@ -1655,6 +1658,20 @@ public:
 	Delitem(str, 0);
 	Delitem(str, DOH_END);
       }
+    }
+
+    if (customdoc) {
+      String *full_str = Swig_document_function(n);
+      doc = NewString("");
+      Printv(doc, triple_double, "\n",
+           indent_docstring(full_str, indent), "\n",
+           indent, triple_double, NIL);
+      Delete(full_str);
+      // Save the generated strings in the parse tree in case they are used later
+      // by post processing tools
+      Setattr(n, "python:docstring", doc);
+      Setattr(n, "python:autodoc", autodoc);
+      return doc;
     }
 
     if (have_auto) {
@@ -2550,6 +2567,21 @@ public:
       Append(f->code, "fail:\n");
       Append(f->code, "Py_INCREF(Py_NotImplemented);\n");
       Append(f->code, "return Py_NotImplemented;\n");
+    } else if (checkAttribute(n, "feature:customdoc", "1")) {
+      String *protoTypes = Swig_prototypes_error(n);
+      Append(f->code, "fail:\n");
+      
+      Printf(f->code, "const char *res_char = SWIG_Python_ArgsTypeDesc(args);\n");
+
+      Printf(f->code, "std::string error_str = "
+	     "\"Wrong number or type of arguments for overloaded function '%s'.\\n\""
+	     "\n\"  Possible prototypes are:\\n\"\n%s"
+	     "\n\"  You have: \" +  (res_char ? std::string(res_char) : \"\") + \"\\n\";\n", symname, protoTypes);
+      Printf(f->code, "if (res_char) SWIG_Python_str_DelForPy3(res_char);\n");
+      Printf(f->code, "SWIG_SetErrorMsg(PyExc_NotImplementedError, error_str.c_str());\n");
+	     
+      Printf(f->code, "return %s;\n", builtin_ctor ? "-1" : "0");
+      Delete(protoTypes);
     } else {
       Node *sibl = n;
       while (Getattr(sibl, "sym:previousSibling"))
@@ -3186,6 +3218,23 @@ public:
     if (need_cleanup) {
       Printv(f->code, cleanup, NIL);
     }
+    
+    if (checkAttribute(n, "feature:customdoc", "1")) {
+      String *protoType = NewString("");
+      Printf(protoType, "    \"");
+      Swig_prototype(n,protoType, "style_error");
+      Printf(protoType, "\\n\"\n");
+      
+      Printf(f->code, "const char *res_char = SWIG_Python_ArgsTypeDesc(args);\n");
+
+      Printf(f->code, "std::string error_str = "
+        "\"Wrong number or type of arguments for function '%s'.\\n\""
+        "\n\"  Prototype:\\n\"\n%s"
+        "\n\"  You have: \" +  (res_char ? std::string(res_char) : \"\") + \"\\n\";\n", iname, protoType);
+      Printf(f->code, "if (res_char) SWIG_Python_str_DelForPy3(res_char);\n");
+      Printf(f->code, "SWIG_SetErrorMsg(PyExc_NotImplementedError, error_str.c_str());\n");
+    }
+    
     if (builtin_ctor)
       Printv(f->code, "  return -1;\n", NIL);
     else
