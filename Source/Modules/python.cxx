@@ -2571,6 +2571,7 @@ public:
       String *protoTypes = Swig_prototypes_error(n);
       Append(f->code, "fail:\n");
       
+      Printf(f->code, "if (!PyErr_Occurred() || PyErr_ExceptionMatches(PyExc_TypeError)) {\n");
       Printf(f->code, "const char *res_char = SWIG_Python_ArgsTypeDesc(args);\n");
 
       Printf(f->code, "std::string error_str = "
@@ -2579,7 +2580,7 @@ public:
 	     "\n\"  You have: \" +  (res_char ? std::string(res_char) : \"\") + \"\\n\";\n", symname, protoTypes);
       Printf(f->code, "if (res_char) { SWIG_Python_str_DelForPy3(res_char); }\n");
       Printf(f->code, "SWIG_SetErrorMsg(PyExc_NotImplementedError, error_str.c_str());\n");
-	     
+	    Printf(f->code, "}\n");
       Printf(f->code, "return %s;\n", builtin_ctor ? "-1" : "0");
       Delete(protoTypes);
     } else {
@@ -3225,6 +3226,7 @@ public:
       Swig_prototype(n,protoType, "style_error");
       Printf(protoType, "\\n\"\n");
       
+      Printf(f->code, "if (!PyErr_Occurred() || PyErr_ExceptionMatches(PyExc_TypeError)) {\n");
       Printf(f->code, "const char *res_char = SWIG_Python_ArgsTypeDesc(args);\n");
 
       Printf(f->code, "std::string error_str = "
@@ -3233,6 +3235,7 @@ public:
         "\n\"  You have: \" +  (res_char ? std::string(res_char) : \"\") + \"\\n\";\n", iname, protoType);
       Printf(f->code, "if (res_char) { SWIG_Python_str_DelForPy3(res_char); }\n");
       Printf(f->code, "SWIG_SetErrorMsg(PyExc_NotImplementedError, error_str.c_str());\n");
+      Printf(f->code, "}\n");
     }
     
     if (builtin_ctor)
