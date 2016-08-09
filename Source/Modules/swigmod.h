@@ -226,6 +226,7 @@ public:
   
   //todo: substitute_inplace, LINSOL (empty doc) ,memory, FACTORY
   
+  virtual void populate_docParmList(Node *n);
   virtual void Swig_prototype(Node *n, String* f, const DOHString_or_char* style);
   virtual String *Swig_document_function(Node *n);
   virtual String *Swig_prototypes_error(Node *n);
@@ -422,10 +423,6 @@ void Wrapper_cast_dispatch_mode_set(int);
 void Wrapper_naturalvar_mode_set(int);
 
 void clean_overloaded(Node *n);
-void populate_docParmList(Node *n);
-int format_paramlist(String* f, List* paramlist, String* normal_entry, String* only_entry, String* no_name, String* self, String* separator);
-String* Swig_symname(Node *n);
-void Swig_doc_split(String *s, String *brief, String *main);
 
 extern "C" {
   const char *Swig_to_string(DOH *object, int count = -1);
