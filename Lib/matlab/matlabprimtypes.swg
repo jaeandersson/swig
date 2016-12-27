@@ -253,7 +253,7 @@ SWIG_FromCharPtrAndSize(const char* carray, size_t size)
 {
    mwSize dims[2] = {1,(mwSize)size};
    mxArray* ret = mxCreateCharArray((mwSize)2,dims);
-   if(!ret) mexErrMsgIdAndTxt("SWIG:FromCharPtrAndSize","mxCreateCharArray failed");
+   if(!ret) SWIG_Matlab_ErrorId("SWIG:FromCharPtrAndSize","mxCreateCharArray failed");
    mxChar *ret_data = (mxChar *)mxGetData(ret);
    size_t i;
    for(i=0; i<size; ++i) ret_data[i] = carray[i];

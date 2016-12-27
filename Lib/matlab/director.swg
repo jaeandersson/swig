@@ -255,7 +255,7 @@ namespace Swig {
           mxDestroyArray(field);
           mxDestroyArray(empty);
           if (error) {
-            mexErrMsgIdAndTxt("SWIG:Director:swig_decref", "Cannot call SwigStorage");
+            SWIG_Matlab_ErrorId("SWIG:Director:swig_decref", "Cannot call SwigStorage");
           }
         }
       }
@@ -271,7 +271,7 @@ namespace Swig {
       int error = SWIG_Matlab_CallInterp(0, 0, 2, rhs, "SwigStorage");
       mxDestroyArray(field);
       if (error) {
-        mexErrMsgIdAndTxt("SWIG:Director:Director", "Cannot call SwigStorage");
+        SWIG_Matlab_ErrorId("SWIG:Director:Director", "Cannot call SwigStorage");
       }
     }
 
@@ -290,7 +290,7 @@ namespace Swig {
       int error = SWIG_Matlab_CallInterp(1, &swig_self, 1, &field, "SwigStorage");
       mxDestroyArray(field);
       if (error) {
-        mexErrMsgIdAndTxt("SWIG:Director:Director", "Cannot call SwigStorage");
+        SWIG_Matlab_ErrorId("SWIG:Director:Director", "Cannot call SwigStorage");
       }
       return swig_self;
     }

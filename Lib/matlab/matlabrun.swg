@@ -155,13 +155,28 @@ SWIG_Matlab_CallInterp(int nlhs, mxArray *plhs[], int nrhs,
 #endif
 }
 
+SWIGRUNTIME void SWIG_Matlab_Error(const char *message) {
+    mxArray *msg = mxCreateString(message);
+    mexCallMATLAB(0, 0, 1, &msg, "error");
+    mxDestroyArray(msg);
+}
+
+SWIGRUNTIME void SWIG_Matlab_ErrorId(const char *errorid, const char *message) {
+    mxArray *msg = mxCreateString(message);
+    mxArray *id  = mxCreateString(errorid);
+    mxArray *arg[2] = {id, msg};
+    mexCallMATLAB(0, 0, 2, arg, "error");
+    mxDestroyArray(msg);
+    mxDestroyArray(id);
+}
+
 SWIGRUNTIME mxArray*
 SWIG_Matlab_CallInterpEx(int nlhs, mxArray *plhs[], int nrhs,
                        mxArray *prhs[], const char *functionName) {
 #ifdef HAVE_OCTAVE
   int flag = mexCallMATLAB(nlhs, plhs, nrhs, prhs, functionName);
   if (flag) {
-    mexErrMsgIdAndTxt("SWIG:CallInterpEx","Not implemented for Octave");
+    SWIG_Matlab_ErrorId("SWIG:CallInterpEx","Not implemented for Octave");
   }
   return 0;
 #else
@@ -172,7 +187,7 @@ SWIG_Matlab_CallInterpEx(int nlhs, mxArray *plhs[], int nrhs,
 /* Convert a packed value value */
 SWIGRUNTIME int
 SWIG_Matlab_ConvertPacked(mxArray* SWIGUNUSEDPARM(pm), void* SWIGUNUSEDPARM(ptr), size_t SWIGUNUSEDPARM(sz), swig_type_info* SWIGUNUSEDPARM(ty)) {
-  mexErrMsgIdAndTxt("SWIG:ConvertPacked","Not implemented");
+  SWIG_Matlab_ErrorId("SWIG:ConvertPacked","Not implemented");
   return SWIG_ERROR;
 }
 
@@ -184,18 +199,18 @@ SWIGRUNTIME mxArray* SWIG_Matlab_NewPointerObj(void *ptr, swig_type_info *type, 
   /* Allocate a pointer object */
   SwigPtr* swig_ptr = 0;
   if (SWIG_Matlab_NewPointer(&swig_ptr, ptr, type, own)) {
-    mexErrMsgIdAndTxt("SWIG:NewPointerObj","Cannot allocate pointer");
+    SWIG_Matlab_ErrorId("SWIG:NewPointerObj","Cannot allocate pointer");
   }
 
   /* Create a SwigRef instance */
   mxArray* pm = 0;
   int ex = SWIG_Matlab_CallInterp(1, &pm, 0, 0, "SwigRef");
-  if (ex) mexErrMsgIdAndTxt("SWIG:NewPointerObj", "Cannot create SwigRef instance");
+  if (ex) SWIG_Matlab_ErrorId("SWIG:NewPointerObj", "Cannot create SwigRef instance");
 
   /* Set pointer property */
   mxArray *pm_ptr = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);
   *(uint64_T *)mxGetData(pm_ptr) = (uint64_T)swig_ptr;
-  if(!pm_ptr) mexErrMsgIdAndTxt("SWIG:NewPointerObj", "mxCreateNumericMatrix failed");
+  if(!pm_ptr) SWIG_Matlab_ErrorId("SWIG:NewPointerObj", "mxCreateNumericMatrix failed");
 
   mxArray *rhs[2] = {pm, pm_ptr};
   mexCallMATLAB(0, 0, 2, rhs, "SwigSet");
@@ -222,7 +237,7 @@ SWIGRUNTIME mxArray* SWIG_Matlab_NewPointerObj(void *ptr, swig_type_info *type, 
 
 SWIGRUNTIMEINLINE mxArray*
 SWIG_Matlab_NewPackedObj(void* SWIGUNUSEDPARM(ptr), size_t SWIGUNUSEDPARM(sz), swig_type_info* SWIGUNUSEDPARM(type)) {
-  mexErrMsgIdAndTxt("SWIG:NewPackedOb","Not implemented");
+  SWIG_Matlab_ErrorId("SWIG:NewPackedOb","Not implemented");
   return 0;
 }
 
@@ -321,7 +336,7 @@ SWIGRUNTIME int SWIG_Matlab_ConvertPtrAndOwn(mxArray* pm, void **ptr, swig_type_
       *own = *own | SWIG_CAST_NEW_MEMORY;
     } else {
       /* badly formed typemap which will lead to a memory leak - it must set and use own to delete *ptr */
-      mexErrMsgIdAndTxt("SWIG:ConvertPointerObj","SWIG error in converting pointer for type %s. Bad typemap?",type->name);
+      SWIG_Matlab_ErrorId("SWIG:ConvertPointerObj", "SWIG error in converting pointer. Bad typemap?");
       return SWIG_ERROR;
     }
   }
@@ -333,11 +348,11 @@ SWIGRUNTIME swig_module_info *SWIG_Matlab_GetModule(void *SWIGUNUSEDPARM(clientd
     /* First call for this module, fetch pointer from MATLAB */
     mxArray* mem = 0;
     int flag = mexCallMATLAB(1, &mem, 0, 0, "SwigMem");
-    if (flag || !mem) mexErrMsgIdAndTxt("SWIG:GetModule", "Cannot call SwigMem");
+    if (flag || !mem) SWIG_Matlab_ErrorId("SWIG:GetModule", "Cannot call SwigMem");
     /* On first call, mem is an empty matrix */
     if (mxGetNumberOfElements(mem)!= 0) {
       if (!mxIsStruct(mem)) {
-        mexErrMsgIdAndTxt("SWIG:GetModule", "Corrupted memory");
+        SWIG_Matlab_ErrorId("SWIG:GetModule", "Corrupted memory");
       }
       mxArray *module = mxGetField(mem, 0,
         "swig_runtime_data_type_pointer" SWIG_RUNTIME_VERSION SWIG_TYPE_TABLE_NAME);
@@ -355,15 +370,15 @@ SWIGRUNTIME void SWIG_Matlab_SetModule(swig_module_info *pointer) {
   mxArray* mem = 0;
   const char *fields[1] = {"swig_runtime_data_type_pointer" SWIG_RUNTIME_VERSION SWIG_TYPE_TABLE_NAME};
   int flag = mexCallMATLAB(1, &mem, 0, 0, "SwigMem");
-  if (flag || !mem) mexErrMsgIdAndTxt("SWIG:SetModule", "Cannot call SwigMem");
+  if (flag || !mem) SWIG_Matlab_ErrorId("SWIG:SetModule", "Cannot call SwigMem");
   /* Under normal circumstances, swigMem is an empty matrix */
   /* but is not required to be for a valid call to SWIG_Matlab_SetModule() */
   if (mxGetNumberOfElements(mem) == 0) {
     mxDestroyArray(mem);
     mem = mxCreateStructMatrix(1,1,1,fields);
-    if(!mem) mexErrMsgIdAndTxt("SWIG:SetModule","mxCreateStructMatrix failed");
+    if(!mem) SWIG_Matlab_ErrorId("SWIG:SetModule","mxCreateStructMatrix failed");
     mxArray *module = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);
-    if(!module) mexErrMsgIdAndTxt("SWIG:SetModule","mxCreateNumericMatrix failed");
+    if(!module) SWIG_Matlab_ErrorId("SWIG:SetModule","mxCreateNumericMatrix failed");
     *(uint64_T *)mxGetData(module) = (uint64_T)pointer;
     mxSetField(mem, 0, fields[0], module);
   } else {
@@ -371,7 +386,7 @@ SWIGRUNTIME void SWIG_Matlab_SetModule(swig_module_info *pointer) {
     int fieldNum = 0;
     /* Add to existing mem if not the same */
     if (!mxIsStruct(mem)) {
-      mexErrMsgIdAndTxt("SWIG:SetModule", "Corrupted memory");
+      SWIG_Matlab_ErrorId("SWIG:SetModule", "Corrupted memory");
     }
     nfields = mxGetNumberOfFields(mem);
     /* Check if same type table */
@@ -383,9 +398,9 @@ SWIGRUNTIME void SWIG_Matlab_SetModule(swig_module_info *pointer) {
       }
     }
     fieldNum = mxAddField(mem, fields[0]);
-    if (fieldNum < 0) mexErrMsgIdAndTxt("SWIG:SetModule", "Error adding field to SwigMem");
+    if (fieldNum < 0) SWIG_Matlab_ErrorId("SWIG:SetModule", "Error adding field to SwigMem");
     mxArray *module = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);
-    if(!module) mexErrMsgIdAndTxt("SWIG:SetModule","mxCreateNumericMatrix failed");
+    if(!module) SWIG_Matlab_ErrorId("SWIG:SetModule","mxCreateNumericMatrix failed");
     *(uint64_T *)mxGetData(module) = (uint64_T)pointer;
     mxSetFieldByNumber(mem, 0, fieldNum, module);
   }
@@ -393,7 +408,7 @@ SWIGRUNTIME void SWIG_Matlab_SetModule(swig_module_info *pointer) {
   flag = mexCallMATLAB(0, 0, 1, &mem, "SwigMem");
   mxDestroyArray(mem);
   if (flag) {
-    mexErrMsgIdAndTxt("SWIG:SetModule", "Could not set variable in SwigMem.\n");
+    SWIG_Matlab_ErrorId("SWIG:SetModule", "Could not set variable in SwigMem.\n");
   }
   saved_swig_module = pointer;
 }
