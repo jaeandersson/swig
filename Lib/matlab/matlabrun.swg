@@ -212,8 +212,12 @@ SWIGRUNTIME mxArray* SWIG_Matlab_NewPointerObj(void *ptr, swig_type_info *type, 
   *(uint64_T *)mxGetData(pm_ptr) = (uint64_T)swig_ptr;
   if(!pm_ptr) SWIG_Matlab_ErrorId("SWIG:NewPointerObj", "mxCreateNumericMatrix failed");
 
+#ifdef HAVE_OCTAVE
   mxArray *rhs[2] = {pm, pm_ptr};
   mexCallMATLAB(0, 0, 2, rhs, "SwigSet");
+#else
+  mxSetProperty(pm, 0, "swigPtr", pm_ptr);
+#endif
   mxDestroyArray(pm_ptr);
 
   /* Create a proxy class of the desired type */
@@ -242,9 +246,15 @@ SWIG_Matlab_NewPackedObj(void* SWIGUNUSEDPARM(ptr), size_t SWIGUNUSEDPARM(sz), s
 }
 
 SWIGRUNTIME int SWIG_Matlab_isOwned(mxArray* pm) {
+  // Short-circuit for non-class types
+  if (mxIsNumeric(pm) || mxIsLogical(pm) || mxIsCell(pm) || mxIsChar(pm)) return 0;
 /* Get index, represented as a uint64_T scalar */
+#ifdef HAVE_OCTAVE
   mxArray *pm_ptr;
   mexCallMATLAB(1, &pm_ptr, 1, &pm, "SwigGet");
+#else
+  mxArray *pm_ptr = mxGetProperty(pm, 0, "swigPtr");
+#endif
   if(!pm_ptr || mxGetNumberOfElements(pm_ptr) != 1 ||
      mxGetClassID(pm_ptr) != mxUINT64_CLASS || mxIsComplex(pm_ptr)) {
     if(pm_ptr) mxDestroyArray(pm_ptr);
@@ -257,9 +267,15 @@ SWIGRUNTIME int SWIG_Matlab_isOwned(mxArray* pm) {
 }
 
 SWIGRUNTIME SwigPtr* SWIG_Matlab_getSwigPtr(mxArray* pm) {
+  // Short-circuit for non-class types
+  if (mxIsNumeric(pm) || mxIsLogical(pm) || mxIsCell(pm) || mxIsChar(pm)) return 0;
 /* Get index, represented as a uint64_T scalar */
+#ifdef HAVE_OCTAVE
   mxArray *pm_ptr;
   mexCallMATLAB(1, &pm_ptr, 1, &pm, "SwigGet");
+#else
+  mxArray *pm_ptr = mxGetProperty(pm, 0, "swigPtr");
+#endif
   if(!pm_ptr || mxGetNumberOfElements(pm_ptr) != 1 ||
      mxGetClassID(pm_ptr) != mxUINT64_CLASS || mxIsComplex(pm_ptr)) {
     if(pm_ptr) mxDestroyArray(pm_ptr);
@@ -276,9 +292,15 @@ SWIGRUNTIME SwigPtr* SWIG_Matlab_getSwigPtr(mxArray* pm) {
 }
 
 SWIGRUNTIME int SWIG_Matlab_ConvertPtrAndOwn(mxArray* pm, void **ptr, swig_type_info *type, int flags, int *own) {
+  // Short-circuit for non-class types
+  if (mxIsNumeric(pm) || mxIsLogical(pm) || mxIsCell(pm) || mxIsChar(pm)) return SWIG_ERROR;
   /* Get index, represented as a uint64_T scalar */
+#ifdef HAVE_OCTAVE
   mxArray *pm_ptr;
   mexCallMATLAB(1, &pm_ptr, 1, &pm, "SwigGet");
+#else
+  mxArray *pm_ptr = mxGetProperty(pm, 0, "swigPtr");
+#endif
   if(!pm_ptr || mxGetNumberOfElements(pm_ptr) != 1 ||
      mxGetClassID(pm_ptr) != mxUINT64_CLASS || mxIsComplex(pm_ptr)){
     if(pm_ptr) mxDestroyArray(pm_ptr);
