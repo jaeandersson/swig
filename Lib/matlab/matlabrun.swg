@@ -156,18 +156,26 @@ SWIG_Matlab_CallInterp(int nlhs, mxArray *plhs[], int nrhs,
 }
 
 SWIGRUNTIME void SWIG_Matlab_Error(const char *message) {
+#ifdef HAVE_OCTAVE
+    mexErrMsgTxt(message);
+#else
     mxArray *msg = mxCreateString(message);
     mexCallMATLAB(0, 0, 1, &msg, "error");
     mxDestroyArray(msg);
+#endif
 }
 
 SWIGRUNTIME void SWIG_Matlab_ErrorId(const char *errorid, const char *message) {
+#ifdef HAVE_OCTAVE
+    mexErrMsgIdAndTxt(errorid, message);
+#else
     mxArray *msg = mxCreateString(message);
     mxArray *id  = mxCreateString(errorid);
     mxArray *arg[2] = {id, msg};
     mexCallMATLAB(0, 0, 2, arg, "error");
     mxDestroyArray(msg);
     mxDestroyArray(id);
+#endif
 }
 
 SWIGRUNTIME mxArray*
