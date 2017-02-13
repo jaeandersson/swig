@@ -4856,7 +4856,7 @@ public:
     }
 
     /* Restore shadow file back to original version */
-   Delete(f_shadow);
+    Delete(f_shadow);
     f_shadow = f_shadow_file;
 
     return SWIG_OK;
