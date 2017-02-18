@@ -2104,7 +2104,7 @@ int MATLAB::classHandler(Node *n) {
   }
 
   // Declare MATLAB class
-  Printf(f_wrap_m, "classdef %s < ", Getattr(n, "sym:name"));
+  Printf(f_wrap_m, "classdef %s %s < ", Getattr(n,"feature:classAttributes"), Getattr(n,"sym:name"));
 
   // Initialization of base classes
   base_init = NewString("");
