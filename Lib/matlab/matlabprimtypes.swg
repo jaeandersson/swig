@@ -231,18 +231,22 @@ SWIGINTERN int
 SWIG_AsCharPtrAndSize(mxArray* pm, char** cptr, size_t* psize, int *alloc)
 {
   if(!mxIsChar(pm) || (mxGetNumberOfElements(pm) != 0 && mxGetM(pm)!=1)) return SWIG_TypeError;
-  size_t len=mxGetN(pm);
-  static char buf[256];
-  int flag = mxGetString(pm,buf,(mwSize)sizeof(buf));
-  if(flag) return SWIG_TypeError;
+  size_t len=mxGetM(pm) * mxGetN(pm) + 1;
+  char* buf = new char[len];
+  int flag = mxGetString(pm,buf,len);
+  if(flag) {
+    delete[] buf;
+    return SWIG_TypeError;
+  }
 
   if (alloc) {
-    *cptr = %new_copy_array(buf, len + 1, char);
+    *cptr = %new_copy_array(buf, len, char);
     *alloc = SWIG_NEWOBJ;
+    delete[] buf;
   } else if (cptr)
     *cptr = buf;
   if (psize)
-    *psize = len + 1;
+    *psize = len;
   return SWIG_OK;
 }
 }
