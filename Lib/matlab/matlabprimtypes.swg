@@ -232,17 +232,17 @@ SWIG_AsCharPtrAndSize(mxArray* pm, char** cptr, size_t* psize, int *alloc)
 {
   if(!mxIsChar(pm) || (mxGetNumberOfElements(pm) != 0 && mxGetM(pm)!=1)) return SWIG_TypeError;
   size_t len=mxGetM(pm) * mxGetN(pm) + 1;
-  char* buf = new char[len];
+  char* buf = (char*)malloc(sizeof(char) * len);
   int flag = mxGetString(pm,buf,len);
   if(flag) {
-    delete[] buf;
+    free(buf);
     return SWIG_TypeError;
   }
 
   if (alloc) {
     *cptr = %new_copy_array(buf, len, char);
     *alloc = SWIG_NEWOBJ;
-    delete[] buf;
+    free(buf);
   } else if (cptr)
     *cptr = buf;
   if (psize)
