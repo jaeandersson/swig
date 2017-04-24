@@ -243,8 +243,10 @@ SWIG_AsCharPtrAndSize(mxArray* pm, char** cptr, size_t* psize, int *alloc)
     *cptr = %new_copy_array(buf, len, char);
     *alloc = SWIG_NEWOBJ;
     free(buf);
-  } else if (cptr)
+  } else if (cptr) {
     *cptr = buf;
+  } else
+    free(buf);
   if (psize)
     *psize = len;
   return SWIG_OK;
