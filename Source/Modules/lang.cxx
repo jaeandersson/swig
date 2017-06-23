@@ -3908,23 +3908,21 @@ void Language::populate_docParmList(Node *n) {
     while (pj) {
       // Skip swallowed inputs
       if (!checkAttribute(pj, "tmap:in:numinputs", "0") || Getattr(pj, "tmap:argout")) {
-        String *name = 0;
-        String *pdoc = Getattr(pj, "tmap:doc");
-        if (pdoc) name = Getattr(pj, "tmap:doc:name");
 
-        // Note: the generated name should be consistent with that in kwnames[]
-        name = name ? name : Getattr(pj, "name");
-        name = name ? name : Getattr(pj, "lname");
-        name = Swig_name_make(pj, 0, name, 0, 0); // rename parameter if a keyword
-        
-        bool output = Getattr(pj, "tmap:argout");
-        
         Hash *node = NewHash();
 
-        
         if (checkAttribute(pj, "name", "self")) {
           Setattr(node, "self", "1");
         } else {
+          String *name = 0;
+          String *pdoc = Getattr(pj, "tmap:doc");
+          if (pdoc) name = Getattr(pj, "tmap:doc:name");
+
+          // Note: the generated name should be consistent with that in kwnames[]
+          name = name ? name : Getattr(pj, "name");
+          name = name ? name : Getattr(pj, "lname");
+          name = Swig_name_make(pj, 0, name, 0, 0); // rename parameter if a keyword
+
           String *type_str = Getattr(pj, "tmap:in:doc");
           if (type_str) {
             type_str = Copy(type_str);
@@ -3937,10 +3935,11 @@ void Language::populate_docParmList(Node *n) {
           Delete(type_str);
           Setattr(node, "name", name);
         }
+
+        bool output = Getattr(pj, "tmap:argout");
         Append(output? arg_out : arg_in, node);
       }
-      
-      
+
       Parm *pk = Getattr(pj, "tmap:in:next");
       if (pk) {
 	pj = pk;
