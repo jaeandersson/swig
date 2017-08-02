@@ -1177,7 +1177,7 @@ int MATLAB::functionWrapper(Node *n) {
     Printf(f->code, "if (SWIG_lasterror_code == SWIG_TypeError) {\n");
     Printf(f->code, "const char* type_name = SWIG_Matlab_ArgsTypeDesc(argc, argv);\n");
     Printf(f->code, "SWIG_Error(SWIG_RuntimeError, \"No matching function for overload function '%s'.\"\n", Getattr(n, "sym:name"));
-    Printf(f->code, "   \"  Prototype:\\n\"\n%s\n     \"  You have: %%s\\n\", type_name);\n",protoType);
+    Printf(f->code, "   \"  Prototype:\\n\"\n%s\n     \"  You have: %%s\", type_name);\n",protoType);
     Printf(f->code, "}\n");
 
     Delete(protoType);
@@ -2931,7 +2931,7 @@ void MATLAB::dispatchFunction(Node *n) {
   if (customdoc) Printf(f->code, "const char* type_name = SWIG_Matlab_ArgsTypeDesc(argc, argv);\n");
   Printf(f->code, "SWIG_Error(SWIG_RuntimeError, \"No matching function for overload function '%s'.\"\n", iname);
   if (customdoc) {
-    Printf(f->code, "   \"  Possible prototypes are:\\n\"\n%s\n     \"  You have: %%s\\n\", type_name);\n", protoTypes);
+    Printf(f->code, "   \"  Possible prototypes are:\\n\"\n%s\n     \"  You have: %%s\", type_name);\n", protoTypes);
   } else {
     Printf(f->code, "   \"  Possible C/C++ prototypes are:\\n\"%s);\n", protoTypes);
   }
