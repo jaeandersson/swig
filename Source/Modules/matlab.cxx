@@ -74,6 +74,7 @@ protected:
   String *get_field;
   String *set_field;
   String *static_methods;
+  String *wrap_class_m;
 
   // Current constant
   int con_id;
@@ -155,6 +156,7 @@ MATLAB::MATLAB():
   get_field(0),
   set_field(0),
   static_methods(0),
+  wrap_class_m(0),
   have_constructor(false),
   have_destructor(false),
   num_gateway(0),
@@ -2103,6 +2105,9 @@ int MATLAB::classHandler(Node *n) {
     SWIG_exit(EXIT_FAILURE);
   }
 
+  // User class instructions
+  wrap_class_m = NewString("");
+
   // Declare MATLAB class
   Printf(f_wrap_m, "classdef %s %s < ", Getattr(n,"feature:classAttributes"), Getattr(n,"sym:name"));
 
@@ -2192,6 +2197,9 @@ int MATLAB::classHandler(Node *n) {
   Printf(f_wrap_m, "%s", static_methods);
   Printf(f_wrap_m, "  end\n");
 
+  // Dump user defined class instructions
+  Printf(f_wrap_m, "%s", wrap_class_m);
+
   // Finalize file
   Printf(f_wrap_m, "end\n");
 
@@ -2200,6 +2208,8 @@ int MATLAB::classHandler(Node *n) {
   base_init = 0;
   Delete(f_wrap_m);
   f_wrap_m = 0;
+  Delete(wrap_class_m);
+  wrap_class_m = 0;
   //note: don't Delete class_name as it's not a new object
   class_name = 0;
   Delete(mfile);
@@ -2644,6 +2654,10 @@ int MATLAB::insertDirective(Node *n) {
 
   if (Cmp(section, "matlab") == 0 && f_wrap_m) {
     Printv(f_wrap_m, code, NIL);
+  } else if (Cmp(section, "matlab_static") == 0 && static_methods) {
+    Printv(static_methods, code, NIL);
+  } else if (Cmp(section, "matlab_class") == 0 && wrap_class_m) {
+    Printv(wrap_class_m, code, NIL);
   } else if (Cmp(section, "matlabsetup") == 0) {
     Printv(f_setup_m, code, NIL);
   } else {
