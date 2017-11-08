@@ -642,7 +642,6 @@ void MATLAB::process_autodoc(Node *n) {
   if (customdoc_enabled) {
     String *decl_str = NewString("");
     String *args_str = NewString("");
-    int maxargs=0;
     String *full_str = Swig_document_function(n);
     Append(decl_info, full_str);
     Delete(decl_str);
