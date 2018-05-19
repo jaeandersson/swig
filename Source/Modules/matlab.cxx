@@ -19,6 +19,7 @@ Matlab Options (available with -matlab)\n\
      -opprefix <str> - Set global operator functions prefix to <str> [default: 'op_']\n\
      -pkgname <str>  - Set package name prefix to <str> [default: '<module>']\n\
      -mexname <name> - Set mex function name to <name> [default: '<module>MEX']\n\
+     -deletebugtry - Workaround for Octave bug #53844 \n\
 \n";
 
 class MATLAB:public Language {
@@ -101,6 +102,7 @@ protected:
   String *pkg_name;
   String *pkg_name_fullpath;
   bool redirectoutput;
+  bool deletebugtry;
   int no_header_file;
 
   // Helper functions
@@ -181,6 +183,7 @@ MATLAB::MATLAB():
 void MATLAB::main(int argc, char *argv[]) {
   int cppcast = 1;
   redirectoutput = false;
+  deletebugtry = false;
 
   for (int i = 1; i < argc; i++) {
     if (argv[i]) {
@@ -224,6 +227,9 @@ void MATLAB::main(int argc, char *argv[]) {
 	}
       } else if (strcmp(argv[i], "-redirectoutput") == 0) {
 	redirectoutput = true;
+	Swig_mark_arg(i);
+      } else if (strcmp(argv[i], "-deletebugtry") == 0) {
+	deletebugtry = true;
 	Swig_mark_arg(i);
       }
     }
@@ -2553,14 +2559,23 @@ int MATLAB::destructorHandler(Node *n) {
   // Add to function switch
   String *wname = Swig_name_wrapper(fullname);
   int gw_ind = toGateway(fullname, wname);
-  Printf(f_wrap_m, "      if self.swigPtr\n");
-  Printf(f_wrap_m, "        %s(%d, self);\n", mex_name, gw_ind);
+
+  if (deletebugtry) {
+    Printf(f_wrap_m, "      try\n");
+  }
+  Printf(f_wrap_m, "        if self.swigPtr\n");
+  Printf(f_wrap_m, "          %s(%d, self);\n", mex_name, gw_ind);
   // Prevent that the object gets deleted another time.
   // This is important for MATLAB as for class hierarchies, it calls delete for
   // each class in the hierarchy. This isn't the case for C++ which only calls the
   // destructor of the "leaf-class", which should take care of deleting everything.
-  Printf(f_wrap_m, "        self.SwigClear();\n");
-  Printf(f_wrap_m, "      end\n");
+  Printf(f_wrap_m, "          self.SwigClear();\n");
+  Printf(f_wrap_m, "        end\n");
+  if (deletebugtry) {
+    Printf(f_wrap_m, "      catch\n");
+    Printf(f_wrap_m, "        %% pass: octave https://savannah.gnu.org/bugs/?53844\n");
+    Printf(f_wrap_m, "      end\n");
+  }
   Printf(f_wrap_m, "    end\n");
 
   Delete(wname);
