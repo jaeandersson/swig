@@ -158,3 +158,10 @@ end
 %if (li_std_string_extra.c_null() ~= None)
 %  error
 %end
+
+% Long strings
+s = repmat('hello',1,100);
+sout = li_std_string_extra.test_reference_inout(s);
+if (s ~= sout)
+  error
+end
