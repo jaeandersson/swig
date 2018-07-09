@@ -20,6 +20,7 @@ Matlab Options (available with -matlab)\n\
      -pkgname <str>  - Set package name prefix to <str> [default: '<module>']\n\
      -mexname <name> - Set mex function name to <name> [default: '<module>MEX']\n\
      -deletebugtry - Workaround for Octave bug #53844 \n\
+     -nodelete - Do not create delete\n\
 \n";
 
 class MATLAB:public Language {
@@ -103,6 +104,7 @@ protected:
   String *pkg_name_fullpath;
   bool redirectoutput;
   bool deletebugtry;
+  bool nodelete;
   int no_header_file;
 
   // Helper functions
@@ -184,6 +186,7 @@ void MATLAB::main(int argc, char *argv[]) {
   int cppcast = 1;
   redirectoutput = false;
   deletebugtry = false;
+  nodelete = false;
 
   for (int i = 1; i < argc; i++) {
     if (argv[i]) {
@@ -230,6 +233,9 @@ void MATLAB::main(int argc, char *argv[]) {
 	Swig_mark_arg(i);
       } else if (strcmp(argv[i], "-deletebugtry") == 0) {
 	deletebugtry = true;
+	Swig_mark_arg(i);
+      } else if (strcmp(argv[i], "-nodelete") == 0) {
+	nodelete = true;
 	Swig_mark_arg(i);
       }
     }
@@ -2552,7 +2558,11 @@ int MATLAB::constructorHandler(Node *n) {
 
 int MATLAB::destructorHandler(Node *n) {
   have_destructor = true;
-  Printf(f_wrap_m, "    function delete(self)\n");
+  if (nodelete) {
+    Printf(f_wrap_m, "    function do_delete(self)\n");
+  } else {
+    Printf(f_wrap_m, "    function delete(self)\n");
+  }
   String *symname = Getattr(n, "sym:name");
   String *fullname = Swig_name_destroy(NSPACE_TODO, symname);
 
