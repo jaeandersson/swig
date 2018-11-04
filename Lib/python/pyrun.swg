@@ -1777,8 +1777,17 @@ SWIG_Python_MustGetPtr(PyObject *obj, swig_type_info *ty, int SWIGUNUSEDPARM(arg
 SWIGRUNTIME const char*
 SWIG_Python_ArgsTypeDesc(PyObject* args) {
   const char *res_char = 0;
+#if PY_VERSION_HEX < 0x03070000
   PyObject* module = PyImport_AddModule(SWIG_module_name);
-  if (!module) return res_char;
+#else
+  PyObject* name = PyString_FromString(SWIG_module_name);
+  PyObject* module = PyImport_GetModule(name);
+  Py_DECREF(name);
+#endif
+  if (!module) {
+    if (PyErr_Occurred()) PyErr_Clear();
+    return res_char;
+  }
   PyObject* dict = PyModule_GetDict(module);
   if (!dict) return res_char;
   PyObject* fun = PyDict_GetItemString(dict, (char*)"swigtypeconvertor");
