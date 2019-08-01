@@ -1804,6 +1804,21 @@ SWIG_Python_ArgsTypeDesc(PyObject* args) {
   return res_char;
 }
 
+/* Convert Python arguments to a type description
+ *
+ * You must call SWIG_Python_str_DelForPy3() on the result after usage
+*/
+SWIGRUNTIME const char*
+SWIG_Python_ArgsTypeDesc_funpack(int nobjs, PyObject** swig_obj) {
+  PyObject *t = PyTuple_New(nobjs);
+  for (int i=0;i<nobjs;++i) {
+    PyTuple_SET_ITEM(t, i, swig_obj[i]);
+  }
+  const char* res = SWIG_Python_ArgsTypeDesc(t);
+  Py_DECREF(t);
+  return res;
+}
+
 #ifdef SWIGPYTHON_BUILTIN
 SWIGRUNTIME int
 SWIG_Python_NonDynamicSetAttr(PyObject *obj, PyObject *name, PyObject *value) {
