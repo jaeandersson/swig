@@ -171,10 +171,12 @@ SWIGRUNTIME void SWIG_Matlab_ErrorId(const char *errorid, const char *message) {
 #else
     mxArray *msg = mxCreateString(message);
     mxArray *id  = mxCreateString(errorid);
-    mxArray *arg[2] = {id, msg};
-    mexCallMATLAB(0, 0, 2, arg, "error");
+    mxArray *s  = mxCreateString("%s");
+    mxArray *arg[3] = {id, s, msg};
+    mexCallMATLAB(0, 0, 3, arg, "error");
     mxDestroyArray(msg);
     mxDestroyArray(id);
+    mxDestroyArray(s);
 #endif
 }
 
