@@ -1257,7 +1257,6 @@ elif test "x$enable_octave_for_matlab" = "xyes"; then
 else 
   AC_MSG_NOTICE([Using MATLAB to test the MATLAB/Octave module])
   MATLAB_OPTS="-nodisplay -nojvm -nosplash"
-  MATLAB_EXEC="-batch"
 
    if test "x$MATLABBIN" = xyes; then
     # Try to detect matlab home automatically
@@ -1286,6 +1285,16 @@ else
       AC_MSG_RESULT([matlab executable not found, Disabling Matlab])
       MATLAB=
     fi
+  fi
+  if test x"$MATLAB" != x; then
+      AC_MSG_CHECKING([for Matlab batch command line option for running scripts])
+      if $MATLAB $MATLAB_OPTS -batch "exit(0)" > /dev/null 2>&1
+      then
+        MATLAB_EXEC="-batch"
+      else
+        MATLAB_EXEC="-r"
+      fi
+      AC_MSG_RESULT([ $MATLAB_EXEC])
   fi
   if test x"$MATLAB" != x; then
       AC_MSG_CHECKING([for Matlab mex command])
