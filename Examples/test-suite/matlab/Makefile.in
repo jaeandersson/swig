@@ -6,7 +6,8 @@ LANGUAGE        = matlab
 MATLAB          = @MATLAB@
 MATLAB_OPTS     = @MATLAB_OPTS@
 MATLAB_EXEC     = @MATLAB_EXEC@
-SCRIPTSUFFIX    = _runme
+SCRIPTSUFFIX    = _runme.m
+SCRIPTSUFFIXNOEXT    = _runme
 
 srcdir       = @srcdir@
 top_srcdir   = @top_srcdir@
@@ -52,10 +53,10 @@ include $(srcdir)/../common.mk
 # Runs the testcase. A testcase is only run if
 # a file is found which has _runme.m appended after the testcase name.
 run_testcase = \
-	if [ -f $(SCRIPTDIR)/$(SCRIPTPREFIX)$*$(SCRIPTSUFFIX).m ]; then \
+	if [ -f $(SCRIPTDIR)/$(SCRIPTPREFIX)$*$(SCRIPTSUFFIX) ]; then \
 	 RUNSCRIPT="\
 	  try; \
-	    $(SCRIPTPREFIX)$*$(SCRIPTSUFFIX); \
+	    $(SCRIPTPREFIX)$*$(SCRIPTSUFFIXNOEXT); \
 	  catch err; \
 	    fprintf(1, ['ERROR: ' err.message '\\\n']); \
 	    fprintf(2, ['ERROR: ' err.message '\\\n']); \
@@ -65,13 +66,6 @@ run_testcase = \
 	 env LD_LIBRARY_PATH=".:$$LD_LIBRARY_PATH" MATLABPATH="$(srcdir):$(SCRIPTDIR):$$MATLABPATH" \
 	 $(RUNTOOL) "$(MATLAB)" $(MATLAB_OPTS) $(MATLAB_EXEC) "$$RUNSCRIPT"  $(RUNPIPE); \
 	 ret=$$?; \
-	 if [ $$ret -ne 0 ] ; then \
-	   echo "   $* failed" $(RUNPIPE) ; \
-	 else \
-	   echo "   $* passed" $(RUNPIPE) ; \
-	 fi \
-	else \
-	   echo "   $* build passed (no runme test present)" $(RUNPIPE) ; \
 	fi; \
 	exit $$ret
 
