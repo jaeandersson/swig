@@ -52,6 +52,7 @@ include $(srcdir)/../common.mk
 
 # Runs the testcase. A testcase is only run if
 # a file is found which has _runme.m appended after the testcase name.
+# Note that we'll set OCTAVE_PATH as well, in case we're running with Octave
 run_testcase = \
 	if [ -f $(SCRIPTDIR)/$(SCRIPTPREFIX)$*$(SCRIPTSUFFIX) ]; then \
 	 RUNSCRIPT="\
@@ -64,6 +65,7 @@ run_testcase = \
 	    end; \
 	  exit(0)" ; \
 	 env LD_LIBRARY_PATH=".:$$LD_LIBRARY_PATH" MATLABPATH="$(srcdir):$(SCRIPTDIR):$$MATLABPATH" \
+         OCTAVE_PATH="$(srcdir):$(SCRIPTDIR):$$OCTAVE_PATH" \
 	 $(RUNTOOL) "$(MATLAB)" $(MATLAB_OPTS) $(MATLAB_EXEC) "$$RUNSCRIPT"  $(RUNPIPE); \
 	 ret=$$?; \
 	fi; \
