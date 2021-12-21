@@ -553,6 +553,7 @@ endif
 
 matlab_run:
 	env MATLABPATH="$(SRCDIR):$(SCRIPTDIR):$$MATLABPATH" \
+	 OCTAVE_PATH="$(SRCDIR):$(SCRIPTDIR):$$OCTAVE_PATH" \
 	$(RUNTOOL) "$(MATLAB)" $(MATLAB_OPTS) $(MATLAB_EXEC) "try; $(MATLAB_SCRIPT); catch err; fprintf(2,['ERROR: ' err.message '\n']);exit(1); end; exit(0)" $(RUNPIPE)
 
 # -----------------------------------------------------------------
