@@ -2759,7 +2759,7 @@ void MATLAB::createSwigRef() {
   Printf(f_wrap_m, "      if numel(s)==1\n");
   Printf(f_wrap_m, "        switch s.type\n");
   Printf(f_wrap_m, "          case '.'\n");
-  Printf(f_wrap_m, "            [varargout{1}] = builtin('subsref',self,substruct('.',s.subs,'()',{}));\n");
+  Printf(f_wrap_m, "            [varargout{1}] = builtin('subsref',self,substruct('.',s.subs));\n");
   Printf(f_wrap_m, "          case '()'\n");
   Printf(f_wrap_m, "            [varargout{1:nargout}] = builtin('subsref',self,substruct('.','paren','()',s.subs));\n");
   Printf(f_wrap_m, "          case '{}'\n");
