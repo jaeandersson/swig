@@ -2752,9 +2752,12 @@ void MATLAB::createSwigRef() {
   Printf(f_wrap_m, "    function b = isnull(self)\n");
   Printf(f_wrap_m, "      b = isempty(self.swigPtr);\n");
   Printf(f_wrap_m, "    end\n");
+#if 0
+  /* removed as default method works fine */
   Printf(f_wrap_m, "    function disp(self)\n");
   Printf(f_wrap_m, "      disp(sprintf('<Swig object, ptr=%%d>',self.swigPtr))\n");
   Printf(f_wrap_m, "    end\n");
+#endif
   Printf(f_wrap_m, "    function varargout = subsref(self,s)\n");
   Printf(f_wrap_m, "      if numel(s)==1\n");
   Printf(f_wrap_m, "        switch s.type\n");
