@@ -1,5 +1,5 @@
 #!/bin/bash
-# expected to be called from elsewhere with certain variables set
+# Expected to be called from elsewhere with certain variables set
 # e.g. RETRY=travis-retry SWIGLANG=python GCC=7
 set -e # exit on failure (same as -o errexit)
 
@@ -7,6 +7,8 @@ if [[ -n "$GCC" ]]; then
 	$RETRY sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
 	$RETRY sudo apt-get -qq update
 	$RETRY sudo apt-get install -qq g++-$GCC
+else
+	$RETRY sudo apt-get -qq update
 fi
 
 $RETRY sudo apt-get -qq install libboost-dev libpcre3-dev
@@ -26,7 +28,11 @@ case "$SWIGLANG" in
 		;;
 	"go")
 		if [[ "$VER" ]]; then
-		  eval "$(gimme ${VER}.x)"
+		  mkdir -p $HOME/bin
+		  curl -sL -o $HOME/bin/gimme https://raw.githubusercontent.com/travis-ci/gimme/master/gimme
+		  chmod +x $HOME/bin/gimme
+		  eval "$($HOME/bin/gimme ${VER}.x)"
+		  $HOME/bin/gimme --list
 		fi
 		;;
 	"javascript")
@@ -34,7 +40,7 @@ case "$SWIGLANG" in
 			"node")
 				$RETRY wget -qO- https://raw.githubusercontent.com/creationix/nvm/v0.33.10/install.sh | bash
 				export NVM_DIR="$HOME/.nvm"
-				[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+				[ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
 				$RETRY nvm install ${VER}
 				nvm use ${VER}
 				if [ "$VER" == "0.10" ] || [ "$VER" == "0.12" ] || [ "$VER" == "4" ] || [ "$VER" == "6" ] ; then
@@ -49,7 +55,7 @@ case "$SWIGLANG" in
 				fi
 				;;
 			"jsc")
-				$RETRY sudo apt-get install -qq libwebkitgtk-dev
+				$RETRY sudo apt-get install -qq libjavascriptcoregtk-4.0-dev
 				;;
 			"v8")
 				$RETRY sudo apt-get install -qq libv8-dev
@@ -73,12 +79,22 @@ case "$SWIGLANG" in
 		$RETRY sudo apt-get -qq install ocaml camlp4
 		;;
 	"octave")
-		$RETRY sudo apt-get -qq install liboctave-dev
+		if [[ "$VER" ]]; then
+			$RETRY sudo add-apt-repository -y ppa:devacom/science
+			$RETRY sudo apt-get -qq update
+			$RETRY sudo apt-get -qq install "liboctave-dev=$VER.*"
+		else
+			$RETRY sudo apt-get -qq update
+			$RETRY sudo apt-get -qq install liboctave-dev
+		fi
 		;;
 	"php")
-		$RETRY sudo add-apt-repository -y ppa:ondrej/php
-		$RETRY sudo apt-get -qq update
-		$RETRY sudo apt-get -qq install php$VER-cli php$VER-dev
+		if [[ "$VER" ]]; then
+			$RETRY sudo apt-get -qq remove "php*-cli" "php*-dev" # Multiple versions are pre-installed
+			$RETRY sudo add-apt-repository -y ppa:ondrej/php
+			$RETRY sudo apt-get -qq update
+			$RETRY sudo apt-get -qq install php$VER-cli php$VER-dev
+		fi
 		;;
 	"python")
 		pip install --user pycodestyle
@@ -87,15 +103,29 @@ case "$SWIGLANG" in
 			$RETRY sudo apt-get -qq update
 			$RETRY sudo apt-get -qq install python${VER}-dev
 			WITHLANG=$SWIGLANG$PY3=$SWIGLANG$VER
-                else
-		        $RETRY sudo apt-get install -qq python${PY3}-dev
-		        WITHLANG=$SWIGLANG$PY3
+		else
+			$RETRY sudo apt-get install -qq python${PY3}-dev
+			WITHLANG=$SWIGLANG$PY3
 		fi
 		;;
 	"r")
 		$RETRY sudo apt-get -qq install r-base
 		;;
 	"ruby")
+		if ! command -v rvm; then
+			case "$VER" in
+				1.9 | 2.0 | 2.1 | 2.2 | 2.3 )
+					$RETRY sudo apt-get -qq install libgdbm-dev libncurses5-dev libyaml-dev libssl1.0-dev
+					;;
+			esac
+			# YOLO
+			curl -sSL https://rvm.io/mpapis.asc | gpg --import -
+			curl -sSL https://rvm.io/pkuczynski.asc | gpg --import -
+			curl -sSL https://get.rvm.io | bash -s stable
+			set +x
+			source $HOME/.rvm/scripts/rvm
+			set -x
+		fi
 		if [[ "$VER" == "2.7" || "$VER" == "3.0" ]]; then
 			# Ruby 2.7+ support is currently only rvm master (30 Dec 2019)
 			$RETRY rvm get master
