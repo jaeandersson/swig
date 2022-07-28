@@ -92,6 +92,18 @@ jobs:
         - SWIGLANG: lua
         - SWIGLANG: lua
           VER: '5.3'
+        - SWIGLANG: matlab
+          VER: R2020a
+          os: ubuntu-18.04
+        - SWIGLANG: matlab
+          VER: R2020b
+          os: ubuntu-18.04
+        - SWIGLANG: matlab
+          VER: R2021a
+          os: ubuntu-18.04
+        - SWIGLANG: matlab
+          VER: R2021b
+          os: ubuntu-18.04
         - SWIGLANG: octave
           CPPSTD: c++11
         - SWIGLANG: octave
@@ -381,6 +393,12 @@ jobs:
           ls -la $(which $CC) $(which $CXX)
           $CC --version
           $CXX --version
+
+    - name: Setup MATLAB (if SWIGLANG == matlab)
+      if: contains(matrix.SWIGLANG, 'matlab')
+      uses: matlab-actions/setup-matlab@v1
+      with:
+        release: ${{ matrix.VER }}
 
     - name: Configure
       run: |

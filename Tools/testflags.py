@@ -16,6 +16,7 @@ def get_cflags(language, std, compiler):
           "java":"-Werror " + c_common,
     "javascript":"-Werror " + c_common,
            "lua":"-Werror " + c_common,
+        "matlab": c_common,
       "mzscheme":"-Werror " + c_common,
          "ocaml":"-Werror " + c_common,
         "octave":"-Werror " + c_common,
@@ -47,6 +48,7 @@ def get_cxxflags(language, std, compiler):
           "java":"-Werror " + cxx_common,
     "javascript":"-Werror " + cxx_common + " -Wno-error=unused-function", # Until overload_rename is fixed for node
            "lua":"-Werror " + cxx_common,
+        "matlab": cxx_common,
       "mzscheme":"-Werror " + cxx_common,
          "ocaml":"-Werror " + cxx_common,
         "octave":"-Werror " + cxx_common,
