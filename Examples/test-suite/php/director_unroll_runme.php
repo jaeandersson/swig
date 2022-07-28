@@ -1,14 +1,13 @@
 <?php
 
 require "tests.php";
-require "director_unroll.php";
 
 // No new functions
-check::functions(array(foo_ping,foo_pong));
-// No new classes
-check::classes(array(Foo,Bar));
-// now new vars
-check::globals(array(bar));
+check::functions(array());
+// New classes
+check::classes(array('Foo','Bar'));
+// No new vars
+check::globals(array());
 
 class MyFoo extends Foo {
   function ping() {
@@ -23,7 +22,7 @@ $b = new Bar();
 $b->set($a);
 $c = $b->get();
 
-check::equal($a->this, $c->this, "this failed");
+// FIXME: The python version checks that a.this == c.this, but we don't seem
+// to have a way to check this with the PHP bindings we generate.
 
 check::done();
-?>

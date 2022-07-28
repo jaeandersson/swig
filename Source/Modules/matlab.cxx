@@ -1453,7 +1453,7 @@ int MATLAB::classDirectorConstructor(Node *n) {
       Wrapper *w = NewWrapper();
       String *call;
       String *basetype = Getattr(parent, "classtype");
-      String *target = Swig_method_decl(0, decl, classname, parms, 0, 0);
+      String *target = Swig_method_decl(0, decl, classname, parms, 0);
       call = Swig_csuperclass_call(0, basetype, superparms);
       Printf(w->def, "%s::%s: %s, Swig::Director(self) { \n", classname, target, call);
       Printf(w->def, "   SWIG_DIRECTOR_RGTR((%s *)this, this); \n", basetype);
@@ -1467,7 +1467,7 @@ int MATLAB::classDirectorConstructor(Node *n) {
 
     /* constructor header */
     {
-      String *target = Swig_method_decl(0, decl, classname, parms, 0, 1);
+      String *target = Swig_method_decl(0, decl, classname, parms, 1);
       Printf(f_directors_h, "    %s;\n", target);
       Delete(target);
     }
@@ -1613,12 +1613,12 @@ int MATLAB::classDirectorMethod(Node *n, Node *parent, String *super) {
   String *pclassname = NewStringf("SwigDirector_%s", classname);
   String *qualified_name = NewStringf("%s::%s", pclassname, name);
   SwigType *rtype = Getattr(n, "conversion_operator") ? 0 : Getattr(n, "classDirectorMethods:type");
-  target = Swig_method_decl(rtype, decl, qualified_name, l, 0, 0);
+  target = Swig_method_decl(rtype, decl, qualified_name, l, 0);
   Printf(w->def, "%s", target);
   Delete(qualified_name);
   Delete(target);
   /* header declaration */
-  target = Swig_method_decl(rtype, decl, name, l, 0, 1);
+  target = Swig_method_decl(rtype, decl, name, l, 1);
   Printf(declaration, "    virtual %s", target);
   Delete(target);
 
@@ -2105,12 +2105,8 @@ int MATLAB::classHandler(Node *n) {
       }
 #endif
       String *bname = Getattr(b.item, "sym:name");
-      Node *bmodNode = Getattr(b.item, "module");
-      Node *bmodoptions = Getattr(bmodNode, "options");
-      String *bpkg = 0;
-      if (bmodoptions) {
-          bpkg = Getattr(bmodoptions, "package");
-      }
+      Node *bpkgNode = Getattr(b.item, "module");
+      String *bpkg = Getattr(bpkgNode, "name");
       if (!bname || !bpkg || GetFlag(b.item, "feature:ignore"))
 	continue;
       base_count++;
@@ -2755,6 +2751,40 @@ void MATLAB::createSwigRef() {
   Printf(f_wrap_m, "    end\n");
   Printf(f_wrap_m, "    function b = isnull(self)\n");
   Printf(f_wrap_m, "      b = isempty(self.swigPtr);\n");
+  Printf(f_wrap_m, "    end\n");
+#if 0
+  /* removed as default method works fine */
+  Printf(f_wrap_m, "    function disp(self)\n");
+  Printf(f_wrap_m, "      disp(sprintf('<Swig object, ptr=%%d>',self.swigPtr))\n");
+  Printf(f_wrap_m, "    end\n");
+#endif
+  Printf(f_wrap_m, "    function varargout = subsref(self,s)\n");
+  Printf(f_wrap_m, "      if numel(s)==1\n");
+  Printf(f_wrap_m, "        switch s.type\n");
+  Printf(f_wrap_m, "          case '.'\n");
+  Printf(f_wrap_m, "            [varargout{1:nargout}] = builtin('subsref',self,substruct('.',s.subs));\n");
+  Printf(f_wrap_m, "          case '()'\n");
+  Printf(f_wrap_m, "            [varargout{1:nargout}] = builtin('subsref',self,substruct('.','paren','()',s.subs));\n");
+  Printf(f_wrap_m, "          case '{}'\n");
+  Printf(f_wrap_m, "            [varargout{1:nargout}] = builtin('subsref',self,substruct('.','brace','()',s.subs));\n");
+  Printf(f_wrap_m, "        end\n");
+  Printf(f_wrap_m, "      else\n");
+  Printf(f_wrap_m, "        [varargout{1:nargout}] = builtin('subsref',self,s);\n");
+  Printf(f_wrap_m, "      end\n");
+  Printf(f_wrap_m, "    end\n");
+  Printf(f_wrap_m, "    function self = subsasgn(self,s,v)\n");
+  Printf(f_wrap_m, "      if numel(s)==1\n");
+  Printf(f_wrap_m, "        switch s.type\n");
+  Printf(f_wrap_m, "          case '.'\n");
+  Printf(f_wrap_m, "            builtin('subsref',self,substruct('.',s.subs,'()',{v}));\n");
+  Printf(f_wrap_m, "          case '()'\n");
+  Printf(f_wrap_m, "            builtin('subsref',self,substruct('.','paren_asgn','()',{v, s.subs{:}}));\n");
+  Printf(f_wrap_m, "          case '{}'\n");
+  Printf(f_wrap_m, "            builtin('subsref',self,substruct('.','setbrace','()',{v, s.subs{:}}));\n");
+  Printf(f_wrap_m, "        end\n");
+  Printf(f_wrap_m, "      else\n");
+  Printf(f_wrap_m, "        self = builtin('subsasgn',self,s,v);\n");
+  Printf(f_wrap_m, "      end\n");
   Printf(f_wrap_m, "    end\n");
   Printf(f_wrap_m, "    function SwigSet(self,ptr)\n");
   Printf(f_wrap_m, "        self.swigPtr = ptr;\n");

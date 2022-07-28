@@ -6,6 +6,7 @@
 .*.sw?
 *.bak
 *.log
+*~
 .DS_Store
 
 # Local PCRE
@@ -66,6 +67,7 @@ CCache/ccache_swig_config.h
 CCache/config.h
 CCache/config.log
 CCache/config.status
+CCache/config_win32.h
 Examples/Makefile
 Examples/d/example.mk
 Examples/guile/Makefile
@@ -85,6 +87,8 @@ swig.spec
 # Build Artifacts
 .dirstamp
 CCache/ccache-swig
+CCache/ccache-swig.1
+CCache/web/ccache-swig-man.html
 Lib/swigwarn.swg
 Source/CParse/parser.c
 Source/CParse/parser.h
@@ -147,8 +151,11 @@ Examples/guile/*/my-guile
 
 # Java
 Examples/test-suite/java/*/
+Examples/test-suite/java/expected.txt
+Examples/test-suite/java/got.txt
 Examples/java/*/*.java
 !Examples/java/*/runme.java
+Examples/java/doxygen/javadocs
 
 # Javascript
 Examples/test-suite/javascript/*/
@@ -161,9 +168,23 @@ Examples/test-suite/matlab/*setup.m
 Examples/test-suite/matlab/SwigRef.m
 Examples/test-suite/matlab/SwigMem.m
 
+# OCaml
+Examples/test-suite/ocaml/*.ml*
+Examples/test-suite/ocaml/*.cm*
+Examples/test-suite/ocaml/*_runme
+!Examples/test-suite/ocaml/*runme.ml
+Examples/ocaml/**/example.ml*
+Examples/ocaml/**/runme
+Examples/ocaml/**/runme_top
+Examples/ocaml/**/*.cm*
+Examples/ocaml/**/swig.ml*
+Examples/ocaml/**/swigp4.ml
+
 # Octave
 swigexample*.oct
 Examples/test-suite/octave/*.oct
+Examples/test-suite/octave/octheaders.hpp
+Examples/test-suite/octave/octheaders.hpp.gch
 
 # Perl5
 Examples/test-suite/perl5/*.pm
@@ -171,11 +192,8 @@ Examples/perl5/*/*.pm
 
 # PHP
 Examples/test-suite/php/php_*.h
-Examples/test-suite/php/*.php
-!Examples/test-suite/php/*runme.php
-!Examples/test-suite/php/skel.php
 Examples/php/*/php_*.h
-Examples/php/*/example.php
+Examples/php/pragmas/example.php
 
 # Python
 #   Based on https://github.com/github/gitignore/blob/master/Python.gitignore
@@ -184,11 +202,16 @@ Examples/php/*/example.php
 /__pycache__/
 Examples/test-suite/python/*.py
 !Examples/test-suite/python/*runme.py
-Examples/python/*/example.py
 Examples/python/**/bar.py
 Examples/python/**/base.py
+Examples/python/**/example.py
 Examples/python/**/foo.py
+Examples/python/**/robin.py
+Examples/python/**/runme3.py
 Examples/python/**/spam.py
+Examples/python/import_packages/module_is_init/pkg1/__init__.py
+Examples/python/import_packages/namespace_pkg/path4.zip
+Examples/python/doxygen/example.html
 
 # R
 Examples/test-suite/r/*.R

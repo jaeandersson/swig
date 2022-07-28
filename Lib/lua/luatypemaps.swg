@@ -39,12 +39,12 @@ $1 = ($type)lua_tonumber(L, $input);%}
 // SWIG assumes that this code will need a pointer to int to be passed in
 // (this might be ok for objects by const ref, but not for numeric primitives)
 // therefore we add a set of typemaps to fix this (for both in & out)
-%typemap(in,checkfn="lua_isnumber") const int&($basetype temp)
-%{ temp=($basetype)lua_tonumber(L,$input); $1=&temp;%}
+%typemap(in,checkfn="lua_isnumber") const int&($*1_ltype temp)
+%{ temp=($*1_ltype)lua_tonumber(L,$input); $1=&temp;%}
 
-%typemap(in,checkfn="lua_isnumber") const unsigned int&($basetype temp)
+%typemap(in,checkfn="lua_isnumber") const unsigned int&($*1_ltype temp)
 %{SWIG_contract_assert((lua_tonumber(L,$input)>=0),"number must not be negative")
-temp=($basetype)lua_tonumber(L,$input); $1=&temp;%}
+temp=($*1_ltype)lua_tonumber(L,$input); $1=&temp;%}
 
 %typemap(out) const int&, const unsigned int&
 %{  lua_pushnumber(L, (lua_Number) *$1); SWIG_arg++;%}
@@ -189,7 +189,7 @@ SWIGINTERN int SWIG_lua_isnilstring(lua_State *L, int idx) {
 // Also needed for object ptrs by const ref
 // eg A* const& ref_pointer(A* const& a);
 // found in mixed_types.i
-%typemap(in,checkfn="lua_isuserdata") SWIGTYPE *const&($*ltype temp)
+%typemap(in,checkfn="SWIG_isptrtype") SWIGTYPE *const&($*ltype temp)
 %{temp=($*ltype)SWIG_MustGetPtr(L,$input,$*descriptor,0,$argnum,"$symname");
 $1=($1_ltype)&temp;%}
 
@@ -235,18 +235,16 @@ $1=($1_ltype)&temp;%}
 // so the standard wrapping cannot be done
 // nor can you cast a member function pointer to a void* (obviously)
 // therefore a special wrapping functions SWIG_ConvertMember() & SWIG_NewMemberObj() were written
-#ifdef __cplusplus
 %typemap(in,checkfn="lua_isuserdata") SWIGTYPE (CLASS::*)
 %{
-  if (!SWIG_IsOK(SWIG_ConvertMember(L,$input,(void*)(&$1),sizeof($type),$descriptor)))
+  if (!SWIG_IsOK(SWIG_ConvertMember(L,$input,(void*)(&$1),sizeof($1),$descriptor)))
     SWIG_fail_ptr("$symname",$argnum,$descriptor);
 %}
 
 %typemap(out) SWIGTYPE (CLASS::*)
-%{ 
-  SWIG_NewMemberObj(L,(void*)(&$1),sizeof($type),$descriptor); SWIG_arg++; 
+%{
+  SWIG_NewMemberObj(L,(void*)(&$1),sizeof($1),$descriptor); SWIG_arg++;
 %}
-#endif
 
 
 // void (must be empty without the SWIG_arg++)
@@ -329,7 +327,7 @@ parameters match which function
 
 %typecheck(SWIG_TYPECHECK_POINTER) SWIGTYPE & {
   void *ptr;
-  if (lua_isuserdata(L,$input)==0 || SWIG_ConvertPtr(L,$input, (void **) &ptr, $1_descriptor, 0)) {
+  if (lua_isuserdata(L,$input)==0 || SWIG_ConvertPtr(L,$input, (void **) &ptr, $1_descriptor, SWIG_POINTER_NO_NULL)) {
     $1 = 0;
   } else {
     $1 = 1;
@@ -338,7 +336,7 @@ parameters match which function
 
 %typecheck(SWIG_TYPECHECK_POINTER) SWIGTYPE && {
   void *ptr;
-  if (lua_isuserdata(L,$input)==0 || SWIG_ConvertPtr(L,$input, (void **) &ptr, $1_descriptor, 0)) {
+  if (lua_isuserdata(L,$input)==0 || SWIG_ConvertPtr(L,$input, (void **) &ptr, $1_descriptor, SWIG_POINTER_NO_NULL)) {
     $1 = 0;
   } else {
     $1 = 1;
@@ -347,7 +345,7 @@ parameters match which function
 
 %typecheck(SWIG_TYPECHECK_POINTER) SWIGTYPE {
   void *ptr;
-  if (lua_isuserdata(L,$input)==0 || SWIG_ConvertPtr(L,$input, (void **) &ptr, $&1_descriptor, 0)) {
+  if (lua_isuserdata(L,$input)==0 || SWIG_ConvertPtr(L,$input, (void **) &ptr, $&1_descriptor, SWIG_POINTER_NO_NULL)) {
     $1 = 0;
   } else {
     $1 = 1;
@@ -369,7 +367,7 @@ parameters match which function
 %typecheck(SWIG_TYPECHECK_POINTER) SWIGTYPE *const&
 {
   void *ptr;
-  if (lua_isuserdata(L,$input)==0 || SWIG_ConvertPtr(L,$input, (void **) &ptr, $*descriptor, 0)) {
+  if (SWIG_isptrtype(L,$input)==0 || SWIG_ConvertPtr(L,$input, (void **) &ptr, $*descriptor, 0)) {
     $1 = 0;
   } else {
     $1 = 1;
@@ -386,6 +384,8 @@ parameters match which function
 
 /* const pointers */
 %apply SWIGTYPE * { SWIGTYPE *const }
+%apply SWIGTYPE (CLASS::*) { SWIGTYPE (CLASS::*const) }
+%apply SWIGTYPE & { SWIGTYPE (CLASS::*const&) }
 
 // size_t (which is just a unsigned long)
 %apply unsigned long { size_t };

@@ -47,6 +47,12 @@
 
 %inline %{
 
+#if __GNUC__ >= 5 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 8)
+/* for anonymous enums */
+/* dereferencing type-punned pointer will break strict-aliasing rules [-Werror=strict-aliasing] */
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
+#endif
+
 enum { AnonEnum1, AnonEnum2 = 100 };
 enum { ReallyAnInteger = 200 };
 //enum { AnonEnum3, AnonEnum4 } instance;
@@ -97,33 +103,33 @@ const SpeedClass::speed &      speedTest5(const SpeedClass::speed &s) { return s
 
 typedef enum { NamedAnon1, NamedAnon2 } namedanon;
 
-namedanon                       namedanonTest1(namedanon e) { return e; }
+namedanon                       namedanonTest1(namedanon e) { return e; } 
 
 typedef enum twonamestag { TwoNames1, TwoNames2, TwoNames3 = 33 } twonames;
 
-twonames                        twonamesTest1(twonames e) { return e; }
-twonamestag                     twonamesTest2(twonamestag e) { return e; }
-enum twonamestag                twonamesTest3(enum twonamestag e) { return e; }
+twonames                        twonamesTest1(twonames e) { return e; } 
+twonamestag                     twonamesTest2(twonamestag e) { return e; } 
+enum twonamestag                twonamesTest3(enum twonamestag e) { return e; } 
 
 struct TwoNamesStruct {
   typedef enum twonamestag { TwoNamesStruct1, TwoNamesStruct2 } twonames;
-  twonames                      twonamesTest1(twonames e) { return e; }
-  twonamestag                   twonamesTest2(twonamestag e) { return e; }
-  enum twonamestag              twonamesTest3(enum twonamestag e) { return e; }
+  twonames                      twonamesTest1(twonames e) { return e; } 
+  twonamestag                   twonamesTest2(twonamestag e) { return e; } 
+  enum twonamestag              twonamesTest3(enum twonamestag e) { return e; } 
 };
 
 namespace AnonSpace{
   typedef enum { NamedAnonSpace1, NamedAnonSpace2 } namedanonspace;
-  namedanonspace                namedanonspaceTest1(namedanonspace e) { return e; }
-  AnonSpace::namedanonspace     namedanonspaceTest2(AnonSpace::namedanonspace e) { return e; }
+  namedanonspace                namedanonspaceTest1(namedanonspace e) { return e; } 
+  AnonSpace::namedanonspace     namedanonspaceTest2(AnonSpace::namedanonspace e) { return e; } 
 }
-AnonSpace::namedanonspace       namedanonspaceTest3(AnonSpace::namedanonspace e) { return e; }
+AnonSpace::namedanonspace       namedanonspaceTest3(AnonSpace::namedanonspace e) { return e; } 
 using namespace AnonSpace;
-namedanonspace                  namedanonspaceTest4(namedanonspace e) { return e; }
+namedanonspace                  namedanonspaceTest4(namedanonspace e) { return e; } 
 
 
 template<typename T> struct TemplateClass {
-  enum scientists { einstein, galileo = 10 };
+  enum scientists { einstein, galileo = 10 }; 
   typedef enum scientists scientiststd1;
   typedef scientists scientiststd2;
   typedef scientiststd1 scientiststd3;
@@ -160,7 +166,7 @@ const TemplateClass<int>::scientiststd3 &   scientistsTest8(const TemplateClass<
 
 namespace Name {
 template<typename T> struct TClass {
-  enum scientists { faraday, bell = 20 };
+  enum scientists { faraday, bell = 20 }; 
   typedef enum scientists scientiststd1;
   typedef scientists scientiststd2;
   typedef scientiststd1 scientiststd3;
@@ -564,6 +570,17 @@ repeat repeatTest(repeat e) { return e; }
 %}
 
 %inline %{
+namespace EnumWithMacro {
+#define PACK(C1,C2,C3,C4) ((C1<<24)|(C2<<16)|(C3<<8)|C4)
+typedef enum {
+  ABCD = PACK('A','B','C','D'),
+  ABCD2 = ABCD
+} enumWithMacro;
+enumWithMacro enumWithMacroTest(enumWithMacro e) { return e; }
+}
+%}
+
+%inline %{
 namespace DifferentSpace {
 enum DifferentTypes {
   typeint = 10,
@@ -571,7 +588,9 @@ enum DifferentTypes {
   typebooltrue = true,
   typebooltwo,
   typechar = 'C',
-  typedefaultint
+  typedefaultint,
+  typecharcompound='A'+1,
+  typecharcompound2='B' << 2
 };
 DifferentTypes differentTypesTest(DifferentTypes n) { return n; }
 
@@ -581,7 +600,9 @@ enum {
   global_typebooltrue = true,
   global_typebooltwo,
   global_typechar = 'C',
-  global_typedefaultint
+  global_typedefaultint,
+  global_typecharcompound='A'+1,
+  global_typecharcompound2='B' << 2
 };
 int globalDifferentTypesTest(int n) { return n; }
 }

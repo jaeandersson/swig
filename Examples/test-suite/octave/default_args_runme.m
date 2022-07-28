@@ -1,20 +1,25 @@
+# do not dump Octave core
+if exist("crash_dumps_octave_core", "builtin")
+  crash_dumps_octave_core(0);
+endif
+
 default_args
 
 
 if (default_args.Statics.staticmethod() != 60)
-  error
+  error("failed");
 endif
 
 if (default_args.cfunc1(1) != 2)
-  error
+  error("failed");
 endif
 
 if (default_args.cfunc2(1) != 3)
-  error
+  error("failed");
 endif
 
 if (default_args.cfunc3(1) != 4)
-  error
+  error("failed");
 endif
 
 

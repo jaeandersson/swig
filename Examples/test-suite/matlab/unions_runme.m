@@ -1,3 +1,4 @@
+import unions.*
 % This is the union runtime testcase. It ensures that values within a 
 % union embedded within a struct can be set and read correctly.
 
@@ -14,7 +15,7 @@ big.jack(300);
 eut = unions.EmbeddedUnionTest();
 
 % First check the SmallStruct in EmbeddedUnionTest
-eut.number(1);
+eut.number = 1;
 eut.uni.small(small);
 Jill1 = eut.uni.small.jill;
 if (Jill1 ~= 200)

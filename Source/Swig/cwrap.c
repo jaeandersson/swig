@@ -277,7 +277,7 @@ int Swig_cargs(Wrapper *w, ParmList *p) {
 	  SwigType_del_rvalue_reference(tvalue);
 	  tycode = SwigType_type(tvalue);
 	  if (tycode != T_USER) {
-	    /* plain primitive type, we copy the the def value */
+	    /* plain primitive type, we copy the def value */
 	    String *lstr = SwigType_lstr(tvalue, defname);
 	    defvalue = NewStringf("%s = %s", lstr, qvalue);
 	    Delete(lstr);
@@ -632,7 +632,7 @@ String *Swig_cppconstructor_director_call(const_String_or_char_ptr name, ParmLis
  * If you define SWIG_FAST_REC_SEARCH, the method will set the found
  * 'attr' in the target class 'n'. If not, the method will set the
  * 'noattr' one. This prevents of having to navigate the entire
- * hierarchy tree everytime, so, it is an O(1) method...  or something
+ * hierarchy tree every time, so, it is an O(1) method...  or something
  * like that. However, it populates all the parsed classes with the
  * 'attr' and/or 'noattr' attributes.
  *
@@ -1022,6 +1022,15 @@ int Swig_MethodToFunction(Node *n, const_String_or_char_ptr nspace, String *clas
       } else {
 	explicit_qualifier = SwigType_namestr(Getattr(Getattr(parentNode(n), "typescope"), "qname"));
       }
+    }
+
+    if (!self && SwigType_isrvalue_reference(Getattr(n, "refqualifier"))) {
+      String *memory_header = NewString("<memory>");
+      Setfile(memory_header, Getfile(n));
+      Setline(memory_header, Getline(n));
+      Swig_fragment_emit(memory_header);
+      self = NewString("std::move(*this).");
+      Delete(memory_header);
     }
 
     call = Swig_cmethod_call(explicitcall_name ? explicitcall_name : name, p, self, explicit_qualifier, director_type);

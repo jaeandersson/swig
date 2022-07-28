@@ -141,7 +141,7 @@ private:
   // This variable holds the name of the current class in Lua. Usually it is
   // the same as C++ class name, but rename directives can change it.
   String *proxy_class_name;
-  // This is a so calld fully qualified symname - the above proxy class name
+  // This is a so called fully qualified symname - the above proxy class name
   // prepended with class namespace. If class Lua name is the same as class C++ name,
   // then it is basically C++ fully qualified name with colons replaced with dots.
   String *full_proxy_class_name;	
@@ -613,13 +613,9 @@ public:
       }
 
       SwigType *pt = Getattr(p, "type");
-      String *ln = Getattr(p, "lname");
-
       /* Look for an input typemap */
       sprintf(source, "%d", i + 1);
       if ((tm = Getattr(p, "tmap:in"))) {
-	Replaceall(tm, "$source", source);
-	Replaceall(tm, "$target", ln);
 	Replaceall(tm, "$input", source);
 	Setattr(p, "emit:input", source);
 	if (Getattr(p, "wrap:disown") || (Getattr(p, "tmap:in:disown"))) {
@@ -678,7 +674,6 @@ public:
     /* Insert constraint checking code */
     for (p = l; p;) {
       if ((tm = Getattr(p, "tmap:check"))) {
-	Replaceall(tm, "$target", Getattr(p, "lname"));
 	Printv(f->code, tm, "\n", NIL);
 	p = Getattr(p, "tmap:check:next");
       } else {
@@ -690,7 +685,6 @@ public:
     String *cleanup = NewString("");
     for (p = l; p;) {
       if ((tm = Getattr(p, "tmap:freearg"))) {
-	Replaceall(tm, "$source", Getattr(p, "lname"));
 	Printv(cleanup, tm, "\n", NIL);
 	p = Getattr(p, "tmap:freearg:next");
       } else {
@@ -709,8 +703,6 @@ public:
 	//                      returnval+=GetInt(p,"tmap:argout:numoutputs");
 	//        }
 	//        else returnval++;
-	Replaceall(tm, "$source", Getattr(p, "lname"));
-	Replaceall(tm, "$target", Swig_cresult_name());
 	Replaceall(tm, "$arg", Getattr(p, "emit:input"));
 	Replaceall(tm, "$input", Getattr(p, "emit:input"));
 	Printv(outarg, tm, "\n", NIL);
@@ -740,7 +732,6 @@ public:
       //              returnval+=GetInt(tm,"numoutputs");
       //      }
       //        else returnval++;
-      Replaceall(tm, "$source", Swig_cresult_name());
       if (GetFlag(n, "feature:new")) {
 	Replaceall(tm, "$owner", "1");
       } else {
@@ -762,14 +753,12 @@ public:
     /* Look to see if there is any newfree cleanup code */
     if (GetFlag(n, "feature:new")) {
       if ((tm = Swig_typemap_lookup("newfree", n, Swig_cresult_name(), 0))) {
-	Replaceall(tm, "$source", Swig_cresult_name());
 	Printf(f->code, "%s\n", tm);
       }
     }
 
     /* See if there is any return cleanup code */
     if ((tm = Swig_typemap_lookup("ret", n, Swig_cresult_name(), 0))) {
-      Replaceall(tm, "$source", Swig_cresult_name());
       Printf(f->code, "%s\n", tm);
     }
 
@@ -1002,6 +991,7 @@ public:
     //    REPORT("variableWrapper", n);
     String *lua_name = Getattr(n, "lua:name");
     assert(lua_name);
+    (void)lua_name;
     current[VARIABLE] = true;
     // let SWIG generate the wrappers
     int result = Language::variableWrapper(n);
@@ -1073,14 +1063,10 @@ public:
     }
 
     if ((tm = Swig_typemap_lookup("consttab", n, name, 0))) {
-      Replaceall(tm, "$source", value);
-      Replaceall(tm, "$target", lua_name);
       Replaceall(tm, "$value", value);
       Replaceall(tm, "$nsname", nsname);
       registerConstant(luaCurrentSymbolNSpace(), tm);
     } else if ((tm = Swig_typemap_lookup("constcode", n, name, 0))) {
-      Replaceall(tm, "$source", value);
-      Replaceall(tm, "$target", lua_name);
       Replaceall(tm, "$value", value);
       Replaceall(tm, "$nsname", nsname);
       Printf(f_init, "%s\n", tm);
@@ -1109,8 +1095,6 @@ public:
         Setattr(n_v2, "sym:name", lua_name_v2);
         tm_v2 = Swig_typemap_lookup("consttab", n_v2, name, 0);
         if (tm_v2) {
-          Replaceall(tm_v2, "$source", value);
-          Replaceall(tm_v2, "$target", lua_name_v2);
           Replaceall(tm_v2, "$value", value);
           Replaceall(tm_v2, "$nsname", nsname);
           registerConstant(getNSpace(), tm_v2);
@@ -1122,8 +1106,6 @@ public:
             Swig_restore(n);
             return SWIG_ERROR;
           }
-          Replaceall(tm_v2, "$source", value);
-          Replaceall(tm_v2, "$target", lua_name_v2);
           Replaceall(tm_v2, "$value", value);
           Replaceall(tm_v2, "$nsname", nsname);
           Printf(f_init, "%s\n", tm_v2);
@@ -1359,7 +1341,7 @@ public:
     String *rt = Copy(getClassType());
     SwigType_add_pointer(rt);
 
-    // Adding class to apropriate namespace
+    // Adding class to appropriate namespace
     registerClass(nspace, wrap_class_name);
     Hash *nspaceHash = getCArraysHash(nspace);
 
@@ -1461,7 +1443,7 @@ public:
     assert(proxy_class_name);
     assert(full_proxy_class_name);
     
-    // Then print class isntance part
+    // Then print class instance part
     Printv(f_wrappers, "static swig_lua_class *swig_", mangled_full_proxy_class_name, "_bases[] = {", base_class, "0};\n", NIL);
     Delete(base_class);
     Printv(f_wrappers, "static const char *swig_", mangled_full_proxy_class_name, "_base_names[] = {", base_class_names, "0};\n", NIL);
@@ -1755,7 +1737,7 @@ public:
    *
    * This is to convert the string of Lua code into a proper string, which can then be
    * emitted into the C/C++ code.
-   * Basically is is a lot of search & replacing of odd sequences
+   * Basically it is a lot of search & replacing of odd sequences
    * ---------------------------------------------------------------------------- */
 
   void escapeCode(String *str) {
@@ -1770,7 +1752,7 @@ public:
   /* -----------------------------------------------------------------------------
    * rawGetCArraysHash(String *name)
    *
-   * A small helper to hide impelementation of how CArrays hashes are stored
+   * A small helper to hide implementation of how CArrays hashes are stored
    * ---------------------------------------------------------------------------- */
 
   Hash *rawGetCArraysHash(const_String_or_char_ptr name) {
@@ -2110,7 +2092,7 @@ public:
       // variable in resulting file
       getCArraysHash(0);
     }
-    // Because we cant access directly 'symtabs', instead we access
+    // Because we can't directly access 'symtabs', instead we access
     // top-level scope and look on all scope pseudo-symbols in it.
     Hash *top_scope = symbolScopeLookup("");
     assert(top_scope);
@@ -2193,7 +2175,7 @@ public:
 
   String *luaCurrentSymbolNSpace() {
     String *scope = 0;
-    // If ouside class, than NSpace is used.
+    // If outside class, than NSpace is used.
     // If inside class, but current[NO_CPP], then this is friend function. It belongs to NSpace
     if (!getCurrentClass() || current[NO_CPP]) {
       scope = getNSpace();

@@ -1,3 +1,8 @@
+# do not dump Octave core
+if exist("crash_dumps_octave_core", "builtin")
+  crash_dumps_octave_core(0);
+endif
+
 std_containers
 
 
@@ -127,7 +132,7 @@ s.append(3);
 j=1;
 for i in s,
   if (i != j)
-    error
+    error("failed");
   endif
   j = j + 1;
 endfor

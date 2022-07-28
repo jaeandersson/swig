@@ -1,10 +1,6 @@
 // Simple tests of overloaded functions
 %module overload_simple
 
-#ifdef SWIGCHICKEN
-%warnfilter(SWIGWARN_LANG_OVERLOAD_SHADOW) fbool;
-#endif
-
 #ifdef SWIGLUA
 // lua only has one numeric type, so most of the overloads shadow each other creating warnings
 %warnfilter(SWIGWARN_LANG_OVERLOAD_SHADOW) foo;
@@ -19,7 +15,10 @@
 %rename(Foos) Foo;
 #endif
 
-#ifndef SWIG_NO_OVERLOAD
+#ifdef SWIGOCAML
+%warnfilter(SWIGWARN_PARSE_KEYWORD) type;
+#endif
+
 %immutable Spam::type;
 
 %inline %{
@@ -176,8 +175,6 @@ long long ll(long long ull) { return ull; }
 %include cmalloc.i
 %malloc(void);
 %free(void);
-
-#endif
 
 
 %inline {  

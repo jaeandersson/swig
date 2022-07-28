@@ -227,7 +227,7 @@ int CFFI::classHandler(Node *n) {
 int CFFI::constructorHandler(Node *n) {
 #ifdef CFFI_DEBUG
   Printf(stderr, "constructor %s\n", Getattr(n, "name"));
-  Printf(stderr, "constructor %s\n and %s and %s", Getattr(n, "kind"), Getattr(n, "sym:name"), Getattr(n, "allegrocl:old-sym:name"));
+  Printf(stderr, "constructor %s\n and %s", Getattr(n, "kind"), Getattr(n, "sym:name"));
 #endif
   Setattr(n, "cffi:constructorfunction", "1");
   // Let SWIG generate a global forwarding function.
@@ -426,7 +426,6 @@ void CFFI::cleanupFunction(Node *n, Wrapper *f, ParmList *parms) {
   if (GetFlag(n, "feature:new")) {
     String *tm = Swig_typemap_lookup("newfree", n, Swig_cresult_name(), 0);
     if (tm) {
-      Replaceall(tm, "$source", Swig_cresult_name());
       Printv(f->code, tm, "\n", NULL);
       Delete(tm);
     }
@@ -542,6 +541,13 @@ int CFFI::functionWrapper(Node *n) {
   argout(parms, f);
 
   cleanupFunction(n, f, parms);
+
+  /* See if there is any return cleanup code */
+  String *tm = 0;
+  if ((tm = Swig_typemap_lookup("ret", n, Swig_cresult_name(), 0))) {
+    Printf(f->code, "%s\n", tm);
+    Delete(tm);
+  }
 
   if (!is_void_return) {
     Printf(f->code, "    return lresult;\n");

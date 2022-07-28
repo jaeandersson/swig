@@ -1,6 +1,5 @@
 <?php
 
-	require "example.php";
 	echo "\nVariables (values printed from C)\n";
 
 	print_vars();
@@ -26,10 +25,10 @@
 	echo "pt	= ".pt_get(), point_print(pt_get()) , "\n";
 
 	/* Try to set the values of some global variables */
-$a = "42.14";
+	$a = "42.14";
 
 	ivar_set($a);
-echo "a = $a\n";
+	echo "a = $a\n";
 	svar_set(-31000);
 	lvar_set(65537);
 	uivar_set(123456);
@@ -91,6 +90,3 @@ echo "a = $a\n";
 	/* And this */
 	//status_set(0);
 	echo "Status = ".status_get()."\n";
-
-?>
-

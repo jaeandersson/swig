@@ -19,10 +19,8 @@ static String *op_prefix   = 0;
 
 static const char *usage = "\
 Octave Options (available with -octave)\n\
-     -cppcast        - Enable C++ casting operators (default)\n\
      -globals <name> - Set <name> used to access C global variables [default: 'cvar']\n\
                        Use '.' to load C global variables into module namespace\n\
-     -nocppcast      - Disable C++ casting operators\n\
      -opprefix <str> - Prefix <str> for global operator functions [default: 'op_']\n\
 \n";
 
@@ -92,8 +90,7 @@ public:
   }
 
   virtual void main(int argc, char *argv[]) {
-    int cppcast = 1;
-      
+
     for (int i = 1; i < argc; i++) {
       if (argv[i]) {
         if (strcmp(argv[i], "-help") == 0) {
@@ -116,12 +113,13 @@ public:
           } else {
             Swig_arg_error();
           }
-        } else if (strcmp(argv[i], "-cppcast") == 0) {
- 	  cppcast = 1;
- 	  Swig_mark_arg(i);
- 	} else if (strcmp(argv[i], "-nocppcast") == 0) {
- 	  cppcast = 0;
- 	  Swig_mark_arg(i);
+	} else if (strcmp(argv[i], "-cppcast") == 0) {
+	  Printf(stderr, "Deprecated command line option: %s. This option is now always on.\n", argv[i]);
+	  Swig_mark_arg(i);
+	} else if (strcmp(argv[i], "-nocppcast") == 0) {
+	  Printf(stderr, "Deprecated command line option: %s. This option is no longer supported.\n", argv[i]);
+	  Swig_mark_arg(i);
+	  SWIG_exit(EXIT_FAILURE);
         }
       }
     }
@@ -130,8 +128,6 @@ public:
       global_name = NewString("cvar");
     if (!op_prefix)
       op_prefix = NewString("op_");
-    if(cppcast)
-      Preprocessor_define((DOH *) "SWIG_CPLUSPLUS_CAST", 0);
 
     SWIG_library_directory("octave");
     Preprocessor_define("SWIGOCTAVE 1", 0);
@@ -139,7 +135,7 @@ public:
     SWIG_typemap_lang("octave");
     allow_overloading();
 
-    // Octave API is C++, so output must be C++ compatibile even when wrapping C code
+    // Octave API is C++, so output must be C++ compatible even when wrapping C code
     if (!cparse_cplusplus)
       Swig_cparse_cplusplusout(1);
   }
@@ -422,13 +418,14 @@ public:
    *   The "lname" attribute in each parameter in plist will be contain a parameter name
    * ----------------------------------------------------------------------------- */
 
-  void addMissingParameterNames(ParmList *plist, int arg_offset) {
+  void addMissingParameterNames(Node* n, ParmList *plist, int arg_offset) {
     Parm *p = plist;
     int i = arg_offset;
     while (p) {
       if (!Getattr(p, "lname")) {
-        String *pname = Swig_cparm_name(p, i);
-        Delete(pname);
+	String *name = makeParameterName(n, p, i);
+	Setattr(p, "lname", name);
+	Delete(name);
       }
       i++;
       p = nextSibling(p);
@@ -440,14 +437,14 @@ public:
     ParmList *plist = CopyParmList(Getattr(n, "parms"));
     Parm *p;
     Parm *pnext;
-    int start_arg_num = is_wrapping_class() ? 1 : 0;
+    int arg_num = is_wrapping_class() ? 1 : 0;
 
-    addMissingParameterNames(plist, start_arg_num); // for $1_name substitutions done in Swig_typemap_attach_parms
+    addMissingParameterNames(n, plist, arg_num); // for $1_name substitutions done in Swig_typemap_attach_parms
 
     Swig_typemap_attach_parms("in", plist, 0);
     Swig_typemap_attach_parms("doc", plist, 0);
 
-    for (p = plist; p; p = pnext) {
+    for (p = plist; p; p = pnext, arg_num++) {
 
       String *tm = Getattr(p, "tmap:in");
       if (tm) {
@@ -469,9 +466,10 @@ public:
         value = Getattr(p, "tmap:doc:value");
       }
 
-      name = name ? name : Getattr(p, "name");
-      name = name ? name : Getattr(p, "lname");
-      name = Swig_name_make(p, 0, name, 0, 0); // rename parameter if a keyword
+      String *made_name = 0;
+      if (!name) {
+	name = made_name = makeParameterName(n, p, arg_num);
+      }
 
       type = type ? type : Getattr(p, "type");
       value = value ? value : Getattr(p, "value");
@@ -507,7 +505,7 @@ public:
 
       Delete(type_str);
       Delete(tex_name);
-      Delete(name);
+      Delete(made_name);
     }
     if (pdocs)
       Setattr(n, "feature:pdocs", pdocs);
@@ -569,6 +567,10 @@ public:
     Wrapper *f = NewWrapper();
     Octave_begin_function(n, f->def, iname, overname, !overloaded);
 
+    // Start default try block to execute
+    // cleanup code if exception is thrown
+    Printf(f->code, "try {\n");
+
     emit_parameter_variables(l, f);
     emit_attach_parmmaps(l, f);
     Setattr(n, "wrap:parms", l);
@@ -609,9 +611,7 @@ public:
         sprintf(source, "args(%d)", j);
         Setattr(p, "emit:input", source);
 
-        Replaceall(tm, "$source", Getattr(p, "emit:input"));
         Replaceall(tm, "$input", Getattr(p, "emit:input"));
-        Replaceall(tm, "$target", Getattr(p, "lname"));
 
         if (Getattr(p, "wrap:disown") || (Getattr(p, "tmap:in:disown"))) {
           Replaceall(tm, "$disown", "SWIG_POINTER_DISOWN");
@@ -656,7 +656,6 @@ public:
     // Insert constraint checking code
     for (p = l; p;) {
       if ((tm = Getattr(p, "tmap:check"))) {
-        Replaceall(tm, "$target", Getattr(p, "lname"));
         Printv(f->code, tm, "\n", NIL);
         p = Getattr(p, "tmap:check:next");
       } else {
@@ -679,7 +678,6 @@ public:
           }
         }
         if (tm && (Len(tm) != 0)) {
-          Replaceall(tm, "$source", Getattr(p, "lname"));
           Printv(cleanup, tm, "\n", NIL);
         }
         p = Getattr(p, "tmap:freearg:next");
@@ -692,8 +690,6 @@ public:
     String *outarg = NewString("");
     for (p = l; p;) {
       if ((tm = Getattr(p, "tmap:argout"))) {
-        Replaceall(tm, "$source", Getattr(p, "lname"));
-        Replaceall(tm, "$target", "_outp");
         Replaceall(tm, "$result", "_outp");
         Replaceall(tm, "$arg", Getattr(p, "emit:input"));
         Replaceall(tm, "$input", Getattr(p, "emit:input"));
@@ -721,8 +717,6 @@ public:
 
     // Return the function value
     if ((tm = Swig_typemap_lookup_out("out", n, Swig_cresult_name(), f, actioncode))) {
-      Replaceall(tm, "$source", Swig_cresult_name());
-      Replaceall(tm, "$target", "_outv");
       Replaceall(tm, "$result", "_outv");
 
       if (GetFlag(n, "feature:new"))
@@ -743,22 +737,31 @@ public:
 
     if (GetFlag(n, "feature:new")) {
       if ((tm = Swig_typemap_lookup("newfree", n, Swig_cresult_name(), 0))) {
-        Replaceall(tm, "$source", Swig_cresult_name());
         Printf(f->code, "%s\n", tm);
       }
     }
 
     if ((tm = Swig_typemap_lookup("ret", n, Swig_cresult_name(), 0))) {
-      Replaceall(tm, "$source", Swig_cresult_name());
       Replaceall(tm, "$result", "_outv");
       Printf(f->code, "%s\n", tm);
       Delete(tm);
     }
 
     Printf(f->code, "return _out;\n");
-    Printf(f->code, "fail:\n");	// we should free locals etc if this happens
+
+    // Execute cleanup code if branched to fail: label
+    Printf(f->code, "fail:\n");
     Printv(f->code, cleanup, NIL);
     Printf(f->code, "return octave_value_list();\n");
+
+    // Execute cleanup code if exception was thrown
+    Printf(f->code, "}\n");
+    Printf(f->code, "catch(...) {\n");
+    Printv(f->code, cleanup, NIL);
+    Printf(f->code, "throw;\n");
+    Printf(f->code, "}\n");
+
+    // End wrapper function
     Printf(f->code, "}\n");
 
     /* Substitute the cleanup code */
@@ -802,7 +805,7 @@ public:
     Printf(tmp, "}");
     Wrapper_add_local(f, "argv", tmp);
     Printv(f->code, dispatch, "\n", NIL);
-    Printf(f->code, "error(\"No matching function for overload\");\n", iname);
+    Printf(f->code, "error(\"No matching function for overload\");\n");
     Printf(f->code, "return octave_value_list();\n");
     Printv(f->code, "}\n", NIL);
 
@@ -832,12 +835,10 @@ public:
     String *setwname = Swig_name_wrapper(setname);
 
     Octave_begin_function(n, setf->def, setname, setwname, true);
-    Printf(setf->def, "if (!SWIG_check_num_args(\"%s_set\",args.length(),1,1,0)) return octave_value_list();", iname);
+    Printf(setf->code, "if (!SWIG_check_num_args(\"%s_set\",args.length(),1,1,0)) return octave_value_list();", iname);
     if (is_assignable(n)) {
       Setattr(n, "wrap:name", setname);
       if ((tm = Swig_typemap_lookup("varin", n, name, 0))) {
-        Replaceall(tm, "$source", "args(0)");
-        Replaceall(tm, "$target", name);
         Replaceall(tm, "$input", "args(0)");
         if (Getattr(n, "tmap:varin:implicitconv")) {
           Replaceall(tm, "$implicitconv", get_implicitconv_flag(n));
@@ -847,8 +848,9 @@ public:
       } else {
         Swig_warning(WARN_TYPEMAP_VARIN_UNDEF, input_file, line_number, "Unable to set variable of type %s.\n", SwigType_str(t, 0));
       }
+      Append(setf->code, "return octave_value_list();\n");
       Append(setf->code, "fail:\n");
-      Printf(setf->code, "return octave_value_list();\n");
+      Append(setf->code, "return octave_value_list();\n");
     } else {
       Printf(setf->code, "return octave_set_immutable(args,nargout);");
     }
@@ -860,18 +862,16 @@ public:
     Octave_begin_function(n, getf->def, getname, getwname, true);
     Wrapper_add_local(getf, "obj", "octave_value obj");
     if ((tm = Swig_typemap_lookup("varout", n, name, 0))) {
-      Replaceall(tm, "$source", name);
-      Replaceall(tm, "$target", "obj");
       Replaceall(tm, "$result", "obj");
       addfail = emit_action_code(n, getf->code, tm);
       Delete(tm);
     } else {
       Swig_warning(WARN_TYPEMAP_VAROUT_UNDEF, input_file, line_number, "Unable to read variable of type %s\n", SwigType_str(t, 0));
     }
-    Append(getf->code, "  return obj;\n");
+    Append(getf->code, "return obj;\n");
     if (addfail) {
       Append(getf->code, "fail:\n");
-      Append(getf->code, "  return octave_value_list();\n");
+      Append(getf->code, "return octave_value_list();\n");
     }
     Append(getf->code, "}\n");
     Wrapper_print(getf, f_wrappers);
@@ -906,8 +906,6 @@ public:
       value = wname;
     }
     if ((tm = Swig_typemap_lookup("constcode", n, name, 0))) {
-      Replaceall(tm, "$source", value);
-      Replaceall(tm, "$target", name);
       Replaceall(tm, "$value", cppvalue ? cppvalue : value);
       Replaceall(tm, "$nsname", iname);
       Printf(f_init, "%s\n", tm);
@@ -1234,7 +1232,7 @@ public:
         Wrapper *w = NewWrapper();
         String *call;
         String *basetype = Getattr(parent, "classtype");
-        String *target = Swig_method_decl(0, decl, classname, parms, 0, 0);
+        String *target = Swig_method_decl(0, decl, classname, parms, 0);
         call = Swig_csuperclass_call(0, basetype, superparms);
         Printf(w->def, "%s::%s: %s," "\nSwig::Director(static_cast<%s*>(this)) { \n", classname, target, call, basetype);
         Append(w->def, "}\n");
@@ -1246,7 +1244,7 @@ public:
 
       // constructor header
       {
-        String *target = Swig_method_decl(0, decl, classname, parms, 0, 1);
+        String *target = Swig_method_decl(0, decl, classname, parms, 1);
         Printf(f_directors_h, "    %s;\n", target);
         Delete(target);
       }
@@ -1310,17 +1308,21 @@ public:
     String *pclassname = NewStringf("SwigDirector_%s", classname);
     String *qualified_name = NewStringf("%s::%s", pclassname, name);
     SwigType *rtype = Getattr(n, "conversion_operator") ? 0 : Getattr(n, "classDirectorMethods:type");
-    target = Swig_method_decl(rtype, decl, qualified_name, l, 0, 0);
+    target = Swig_method_decl(rtype, decl, qualified_name, l, 0);
     Printf(w->def, "%s", target);
     Delete(qualified_name);
     Delete(target);
 
     // header declaration
-    target = Swig_method_decl(rtype, decl, name, l, 0, 1);
+    target = Swig_method_decl(rtype, decl, name, l, 1);
     Printf(declaration, "    virtual %s", target);
     Delete(target);
 
     // Get any exception classes in the throws typemap
+    if (Getattr(n, "noexcept")) {
+      Append(w->def, " noexcept");
+      Append(declaration, " noexcept");
+    }
     ParmList *throw_parm_list = 0;
 
     if ((throw_parm_list = Getattr(n, "throws")) || Getattr(n, "throw")) {
@@ -1355,11 +1357,19 @@ public:
     // declare method return value
     // if the return value is a reference or const reference, a specialized typemap must
     // handle it, including declaration of c_result ($result).
-    if (!is_void) {
-      if (!(ignored_method && !pure_virtual)) {
-        String *cres = SwigType_lstr(returntype, "c_result");
-        Printf(w->code, "%s;\n", cres);
-        Delete(cres);
+    if (!is_void && (!ignored_method || pure_virtual)) {
+      if (!SwigType_isclass(returntype)) {
+	if (!(SwigType_ispointer(returntype) || SwigType_isreference(returntype))) {
+	  String *construct_result = NewStringf("= SwigValueInit< %s >()", SwigType_lstr(returntype, 0));
+	  Wrapper_add_localv(w, "c_result", SwigType_lstr(returntype, "c_result"), construct_result, NIL);
+	  Delete(construct_result);
+	} else {
+	  Wrapper_add_localv(w, "c_result", SwigType_lstr(returntype, "c_result"), "= 0", NIL);
+	}
+      } else {
+	String *cres = SwigType_lstr(returntype, "c_result");
+	Printf(w->code, "%s;\n", cres);
+	Delete(cres);
       }
     }
 
@@ -1381,7 +1391,7 @@ public:
       Swig_director_parms_fixup(l);
 
       Swig_typemap_attach_parms("in", l, 0);
-      Swig_typemap_attach_parms("directorin", l, 0);
+      Swig_typemap_attach_parms("directorin", l, w);
       Swig_typemap_attach_parms("directorargout", l, w);
 
       Parm *p;

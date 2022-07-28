@@ -1,12 +1,13 @@
 dnl Process this file with autoconf to produce a configure script.
 
-AC_INIT([ccache-swig], [0.0]) # Get version from SWIG in ccache_swig_config.h.in
-AC_PREREQ(2.52)
+AC_INIT([ccache-swig],[0.0]) # Get version from SWIG in ccache_swig_config.h.in
+AC_PREREQ([2.60])
 AC_CONFIG_SRCDIR([ccache.h])
 
 AC_MSG_NOTICE([Configuring ccache])
 
-AC_CONFIG_HEADER(config.h)
+AC_CONFIG_HEADERS([config.h])
+AC_CONFIG_FILES([config_win32.h])
 
 dnl Checks for programs.
 AC_PROG_CC
@@ -14,6 +15,20 @@ AC_PROG_CPP
 AC_PROG_INSTALL
 AC_ARG_PROGRAM # for program_transform_name
 
+AC_SUBST(PROGRAM_NAME)
+if test "x$program_prefix" != "xNONE" -a "x$program_prefix" != "x" 
+then
+	PROGRAM_NAME="$program_prefix$PACKAGE_NAME"
+else
+	PROGRAM_NAME="$PACKAGE_NAME"
+fi
+if test "x$program_suffix" != "xNONE" -a "x$program_suffix" != "x" 
+then
+	PROGRAM_NAME="$PROGRAM_NAME$program_suffix"
+fi
+
+AC_DEFINE_UNQUOTED(PROGRAM_NAME, "$PROGRAM_NAME", [Define my program name])
+   
 AC_DEFINE([_GNU_SOURCE], 1,
           [Define _GNU_SOURCE so that we get all necessary prototypes])
 
@@ -26,7 +41,7 @@ else
 fi
 
 AC_HEADER_DIRENT
-AC_HEADER_TIME
+
 AC_HEADER_SYS_WAIT
 
 AC_CHECK_HEADERS(ctype.h strings.h stdlib.h string.h pwd.h sys/time.h)
@@ -36,19 +51,16 @@ AC_CHECK_FUNCS(gethostname getpwuid)
 AC_CHECK_FUNCS(utimes)
 
 AC_CACHE_CHECK([for compar_fn_t in stdlib.h],ccache_cv_COMPAR_FN_T, [
-    AC_TRY_COMPILE(
-[#include <stdlib.h>],
-[
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <stdlib.h>]], [[
 void test_fn(void) { qsort(NULL, 0, 0, (__compar_fn_t)NULL); }
-],
-	ccache_cv_COMPAR_FN_T=yes,ccache_cv_COMPAR_FN_T=no)])
+]])],[ccache_cv_COMPAR_FN_T=yes],[ccache_cv_COMPAR_FN_T=no])])
 if test x"$ccache_cv_COMPAR_FN_T" = x"yes"; then
    AC_DEFINE(HAVE_COMPAR_FN_T, 1, [ ])
 fi
 
 dnl Note: This could be replaced by AC_FUNC_SNPRINTF() in the autoconf macro archive
 AC_CACHE_CHECK([for C99 vsnprintf],ccache_cv_HAVE_C99_VSNPRINTF,[
-AC_TRY_RUN([
+AC_RUN_IFELSE([AC_LANG_SOURCE([[
 #include <sys/types.h>
 #include <stdarg.h>
 void foo(const char *format, ...) { 
@@ -66,8 +78,7 @@ void foo(const char *format, ...) {
        exit(0);
 }
 main() { foo("hello"); }
-],
-ccache_cv_HAVE_C99_VSNPRINTF=yes,ccache_cv_HAVE_C99_VSNPRINTF=no,ccache_cv_HAVE_C99_VSNPRINTF=cross)])
+]])],[ccache_cv_HAVE_C99_VSNPRINTF=yes],[ccache_cv_HAVE_C99_VSNPRINTF=no],[ccache_cv_HAVE_C99_VSNPRINTF=cross])])
 if test x"$ccache_cv_HAVE_C99_VSNPRINTF" = x"yes"; then
     AC_DEFINE(HAVE_C99_VSNPRINTF, 1, [ ])
 fi

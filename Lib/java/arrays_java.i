@@ -104,7 +104,7 @@ JAVA_ARRAYS_DECL(int, jint, Int, Int)                 /* int[] */
 JAVA_ARRAYS_DECL(unsigned int, jlong, Long, Uint)     /* unsigned int[] */
 JAVA_ARRAYS_DECL(long, jint, Int, Long)               /* long[] */
 JAVA_ARRAYS_DECL(unsigned long, jlong, Long, Ulong)   /* unsigned long[] */
-JAVA_ARRAYS_DECL(jlong, jlong, Long, Longlong)        /* long long[] */
+JAVA_ARRAYS_DECL(long long, jlong, Long, Longlong)    /* long long[] */
 JAVA_ARRAYS_DECL(float, jfloat, Float, Float)         /* float[] */
 JAVA_ARRAYS_DECL(double, jdouble, Double, Double)     /* double[] */
 
@@ -128,7 +128,7 @@ JAVA_ARRAYS_IMPL(int, jint, Int, Int)                 /* int[] */
 JAVA_ARRAYS_IMPL(unsigned int, jlong, Long, Uint)     /* unsigned int[] */
 JAVA_ARRAYS_IMPL(long, jint, Int, Long)               /* long[] */
 JAVA_ARRAYS_IMPL(unsigned long, jlong, Long, Ulong)   /* unsigned long[] */
-JAVA_ARRAYS_IMPL(jlong, jlong, Long, Longlong)        /* long long[] */
+JAVA_ARRAYS_IMPL(long long, jlong, Long, Longlong)    /* long long[] */
 JAVA_ARRAYS_IMPL(float, jfloat, Float, Float)         /* float[] */
 JAVA_ARRAYS_IMPL(double, jdouble, Double, Double)     /* double[] */
 
@@ -337,7 +337,8 @@ JAVA_ARRAYS_TYPEMAPS(double, double, jdouble, Double, "[D")     /* double[ANY] *
 
 /* Add some code to the proxy class of the array type for converting between type used in 
  * JNI class (long[]) and type used in proxy class ( ARRAYSOFCLASSES[] ) */
-%typemap(javacode) ARRAYSOFCLASSES %{
+%extend ARRAYSOFCLASSES {
+%proxycode %{
   protected static long[] cArrayUnwrap($javaclassname[] arrayWrapper) {
       long[] cArray = new long[arrayWrapper.length];
       for (int i=0; i<arrayWrapper.length; i++)
@@ -352,6 +353,7 @@ JAVA_ARRAYS_TYPEMAPS(double, double, jdouble, Double, "[D")     /* double[ANY] *
     return arrayWrapper;
   }
 %}
+}
 
 %enddef /* JAVA_ARRAYSOFCLASSES */
 

@@ -16,11 +16,9 @@
 #include <ctype.h>
 
 static const char *usage = "\
-Perl5 Options (available with -perl5)\n\
+Perl 5 Options (available with -perl5)\n\
      -compat         - Compatibility mode\n\
      -const          - Wrap constants as constants and not variables (implies -proxy)\n\
-     -cppcast        - Enable C++ casting operators\n\
-     -nocppcast      - Disable C++ casting operators, useful for generating bugs\n\
      -nopm           - Do not generate the .pm file\n\
      -noproxy        - Don't create proxy classes\n\
      -proxy          - Create proxy classes\n\
@@ -148,7 +146,6 @@ public:
 
   virtual void main(int argc, char *argv[]) {
     int i = 1;
-    int cppcast = 1;
 
     SWIG_library_directory("perl5");
 
@@ -189,23 +186,20 @@ public:
 	} else if (strcmp(argv[i],"-v") == 0) {
 	    Swig_mark_arg(i);
 	    verbose++;
-	} else if (strcmp(argv[i], "-cppcast") == 0) {
-	  cppcast = 1;
-	  Swig_mark_arg(i);
-	} else if (strcmp(argv[i], "-nocppcast") == 0) {
-	  cppcast = 0;
-	  Swig_mark_arg(i);
 	} else if (strcmp(argv[i], "-compat") == 0) {
 	  compat = 1;
 	  Swig_mark_arg(i);
 	} else if (strcmp(argv[i], "-help") == 0) {
 	  fputs(usage, stdout);
+	} else if (strcmp(argv[i], "-cppcast") == 0) {
+	  Printf(stderr, "Deprecated command line option: %s. This option is now always on.\n", argv[i]);
+	  Swig_mark_arg(i);
+	} else if (strcmp(argv[i], "-nocppcast") == 0) {
+	  Printf(stderr, "Deprecated command line option: %s. This option is no longer supported.\n", argv[i]);
+	  Swig_mark_arg(i);
+	  SWIG_exit(EXIT_FAILURE);
 	}
       }
-    }
-
-    if (cppcast) {
-      Preprocessor_define((DOH *) "SWIG_CPLUSPLUS_CAST", 0);
     }
 
     Preprocessor_define("SWIGPERL 1", 0);
@@ -731,14 +725,11 @@ public:
 
       /* Produce string representation of source and target arguments */
       sprintf(source, "ST(%d)", i);
-      String *target = Getattr(p, "lname");
 
       if (i >= num_required) {
 	Printf(f->code, "    if (items > %d) {\n", i);
       }
       if ((tm = Getattr(p, "tmap:in"))) {
-	Replaceall(tm, "$target", target);
-	Replaceall(tm, "$source", source);
 	Replaceall(tm, "$input", source);
 	Setattr(p, "emit:input", source);	/* Save input location */
 
@@ -773,7 +764,6 @@ public:
     /* Insert constraint checking code */
     for (p = l; p;) {
       if ((tm = Getattr(p, "tmap:check"))) {
-	Replaceall(tm, "$target", Getattr(p, "lname"));
 	Printv(f->code, tm, "\n", NIL);
 	p = Getattr(p, "tmap:check:next");
       } else {
@@ -784,7 +774,6 @@ public:
     /* Insert cleanup code */
     for (i = 0, p = l; p; i++) {
       if ((tm = Getattr(p, "tmap:freearg"))) {
-	Replaceall(tm, "$source", Getattr(p, "lname"));
 	Replaceall(tm, "$arg", Getattr(p, "emit:input"));
 	Replaceall(tm, "$input", Getattr(p, "emit:input"));
 	Printv(cleanup, tm, "\n", NIL);
@@ -799,8 +788,6 @@ public:
     for (i = 0, p = l; p; i++) {
       if ((tm = Getattr(p, "tmap:argout"))) {
 	SwigType *t = Getattr(p, "type");
-	Replaceall(tm, "$source", Getattr(p, "lname"));
-	Replaceall(tm, "$target", "ST(argvi)");
 	Replaceall(tm, "$result", "ST(argvi)");
 	if (is_shadow(t)) {
 	  Replaceall(tm, "$shadow", "SWIG_SHADOW");
@@ -861,8 +848,6 @@ public:
 
     if ((tm = Swig_typemap_lookup_out("out", n, Swig_cresult_name(), f, actioncode))) {
       SwigType *t = Getattr(n, "type");
-      Replaceall(tm, "$source", Swig_cresult_name());
-      Replaceall(tm, "$target", "ST(argvi)");
       Replaceall(tm, "$result", "ST(argvi)");
       if (is_shadow(t)) {
 	Replaceall(tm, "$shadow", "SWIG_SHADOW");
@@ -890,14 +875,21 @@ public:
 
     if (GetFlag(n, "feature:new")) {
       if ((tm = Swig_typemap_lookup("newfree", n, Swig_cresult_name(), 0))) {
-	Replaceall(tm, "$source", Swig_cresult_name());
 	Printf(f->code, "%s\n", tm);
       }
     }
 
     if ((tm = Swig_typemap_lookup("ret", n, Swig_cresult_name(), 0))) {
-      Replaceall(tm, "$source", Swig_cresult_name());
       Printf(f->code, "%s\n", tm);
+    }
+
+    if (director_method) {
+      if ((tm = Swig_typemap_lookup("directorfree", n, Swig_cresult_name(), 0))) {
+	Replaceall(tm, "$input", Swig_cresult_name());
+	Replaceall(tm, "$result", "ST(argvi)");
+	Printf(f->code, "%s\n", tm);
+	Delete(tm);
+      }
     }
 
     Printv(f->code, "XSRETURN(argvi);\n", "fail:\n", cleanup, "SWIG_croak_null();\n" "}\n" "}\n", NIL);
@@ -992,8 +984,6 @@ public:
       /* Check for a few typemaps */
       tm = Swig_typemap_lookup("varin", n, name, 0);
       if (tm) {
-	Replaceall(tm, "$source", "sv");
-	Replaceall(tm, "$target", name);
 	Replaceall(tm, "$input", "sv");
 	/* Printf(setf->code,"%s\n", tm); */
 	emit_action_code(n, setf->code, tm);
@@ -1016,9 +1006,7 @@ public:
     Printv(getf->code, tab4, "MAGIC_PPERL\n", NIL);
 
     if ((tm = Swig_typemap_lookup("varout", n, name, 0))) {
-      Replaceall(tm, "$target", "sv");
       Replaceall(tm, "$result", "sv");
-      Replaceall(tm, "$source", name);
       if (is_shadow(t)) {
 	Replaceall(tm, "$shadow", "SWIG_SHADOW");
       } else {
@@ -1108,8 +1096,6 @@ public:
     }
 
     if ((tm = Swig_typemap_lookup("consttab", n, name, 0))) {
-      Replaceall(tm, "$source", value);
-      Replaceall(tm, "$target", name);
       Replaceall(tm, "$value", value);
       if (is_shadow(type)) {
 	Replaceall(tm, "$shadow", "SWIG_SHADOW");
@@ -1118,8 +1104,6 @@ public:
       }
       Printf(constant_tab, "%s,\n", tm);
     } else if ((tm = Swig_typemap_lookup("constcode", n, name, 0))) {
-      Replaceall(tm, "$source", value);
-      Replaceall(tm, "$target", name);
       Replaceall(tm, "$value", value);
       if (is_shadow(type)) {
 	Replaceall(tm, "$shadow", "SWIG_SHADOW");
@@ -2018,7 +2002,7 @@ public:
 	Wrapper *w = NewWrapper();
 	String *call;
 	String *basetype = Getattr(parent, "classtype");
-	String *target = Swig_method_decl(0, decl, classname, parms, 0, 0);
+	String *target = Swig_method_decl(0, decl, classname, parms, 0);
 	call = Swig_csuperclass_call(0, basetype, superparms);
 	Printf(w->def, "%s::%s: %s, Swig::Director(self) { \n", classname, target, call);
 	Printf(w->def, "   SWIG_DIRECTOR_RGTR((%s *)this, this); \n", basetype);
@@ -2031,7 +2015,7 @@ public:
 
       /* constructor header */
       {
-	String *target = Swig_method_decl(0, decl, classname, parms, 0, 1);
+	String *target = Swig_method_decl(0, decl, classname, parms, 1);
 	Printf(f_directors_h, "    %s;\n", target);
 	Delete(target);
       }
@@ -2080,16 +2064,20 @@ public:
     String *pclassname = NewStringf("SwigDirector_%s", classname);
     String *qualified_name = NewStringf("%s::%s", pclassname, name);
     SwigType *rtype = Getattr(n, "conversion_operator") ? 0 : Getattr(n, "classDirectorMethods:type");
-    target = Swig_method_decl(rtype, decl, qualified_name, l, 0, 0);
+    target = Swig_method_decl(rtype, decl, qualified_name, l, 0);
     Printf(w->def, "%s", target);
     Delete(qualified_name);
     Delete(target);
     /* header declaration */
-    target = Swig_method_decl(rtype, decl, name, l, 0, 1);
+    target = Swig_method_decl(rtype, decl, name, l, 1);
     Printf(declaration, "    virtual %s", target);
     Delete(target);
 
     // Get any exception classes in the throws typemap
+    if (Getattr(n, "noexcept")) {
+      Append(w->def, " noexcept");
+      Append(declaration, " noexcept");
+    }
     ParmList *throw_parm_list = 0;
 
     if ((throw_parm_list = Getattr(n, "throws")) || Getattr(n, "throw")) {
@@ -2125,17 +2113,26 @@ public:
      * if the return value is a reference or const reference, a specialized typemap must
      * handle it, including declaration of c_result ($result).
      */
-    if (!is_void) {
-      if (!(ignored_method && !pure_virtual)) {
+    if (!is_void && (!ignored_method || pure_virtual)) {
+      if (!SwigType_isclass(returntype)) {
+	if (!(SwigType_ispointer(returntype) || SwigType_isreference(returntype))) {
+	  String *construct_result = NewStringf("= SwigValueInit< %s >()", SwigType_lstr(returntype, 0));
+	  Wrapper_add_localv(w, "c_result", SwigType_lstr(returntype, "c_result"), construct_result, NIL);
+	  Delete(construct_result);
+	} else {
+	  Wrapper_add_localv(w, "c_result", SwigType_lstr(returntype, "c_result"), "= 0", NIL);
+	}
+      } else {
 	String *cres = SwigType_lstr(returntype, "c_result");
 	Printf(w->code, "%s;\n", cres);
 	Delete(cres);
       }
-      if (!ignored_method) {
-	String *pres = NewStringf("SV *%s", Swig_cresult_name());
-	Wrapper_add_local(w, Swig_cresult_name(), pres);
-	Delete(pres);
-      }
+    }
+
+    if (!is_void && !ignored_method) {
+      String *pres = NewStringf("SV *%s", Swig_cresult_name());
+      Wrapper_add_local(w, Swig_cresult_name(), pres);
+      Delete(pres);
     }
 
     if (ignored_method) {
@@ -2158,7 +2155,7 @@ public:
 
       /* remove the wrapper 'w' since it was producing spurious temps */
       Swig_typemap_attach_parms("in", l, 0);
-      Swig_typemap_attach_parms("directorin", l, 0);
+      Swig_typemap_attach_parms("directorin", l, w);
       Swig_typemap_attach_parms("directorargout", l, w);
 
       Wrapper_add_local(w, "SP", "dSP");
@@ -2325,14 +2322,14 @@ public:
 	Replaceall(tm, "$error", "ERRSV");
 	Printv(w->code, Str(tm), "\n", NIL);
       } else {
-	Printf(w->code, "  Swig::DirectorMethodException::raise(ERRSV);\n", classname, pyname);
+	Printf(w->code, "  Swig::DirectorMethodException::raise(ERRSV);\n");
       }
       Append(w->code, "}\n");
       Delete(tm);
 
       /*
        * Python method may return a simple object, or a tuple.
-       * for in/out aruments, we have to extract the appropriate PyObjects from the tuple,
+       * for in/out arguments, we have to extract the appropriate PyObjects from the tuple,
        * then marshal everything back to C/C++ (return value and output arguments).
        *
        */
@@ -2486,9 +2483,12 @@ public:
     Delete(mangle);
     Delete(ptype);
 
-    if (Getattr(n, "throw")) {
-      Printf(f_directors_h, "    virtual ~%s() throw ();\n", DirectorClassName);
-      Printf(f_directors, "%s::~%s() throw () {%s}\n\n", DirectorClassName, DirectorClassName, body);
+    if (Getattr(n, "noexcept")) {
+      Printf(f_directors_h, "    virtual ~%s() noexcept;\n", DirectorClassName);
+      Printf(f_directors, "%s::~%s() noexcept {%s}\n\n", DirectorClassName, DirectorClassName, body);
+    } else if (Getattr(n, "throw")) {
+      Printf(f_directors_h, "    virtual ~%s() throw();\n", DirectorClassName);
+      Printf(f_directors, "%s::~%s() throw() {%s}\n\n", DirectorClassName, DirectorClassName, body);
     } else {
       Printf(f_directors_h, "    virtual ~%s();\n", DirectorClassName);
       Printf(f_directors, "%s::~%s() {%s}\n\n", DirectorClassName, DirectorClassName, body);

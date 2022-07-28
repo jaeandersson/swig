@@ -8,6 +8,8 @@
 #ifndef SWIG_DIRECTOR_PHP_HEADER_
 #define SWIG_DIRECTOR_PHP_HEADER_
 
+#define SWIG_DIRECTOR_CAST(ARG) dynamic_cast<Swig::Director *>(ARG)
+
 #include <string>
 #include <exception>
 #include <map>
@@ -76,37 +78,51 @@ namespace Swig {
   };
 
   class Director {
+    private:
+      /* flag indicating whether the object is owned by PHP or C++ */
+      mutable bool swig_disown_flag;
+
     protected:
-      zval *swig_self;
+      // "mutable" so we can get a non-const pointer to it in const methods.
+      mutable zval swig_self;
       typedef std::map<void *, GCItem_var> swig_ownership_map;
       mutable swig_ownership_map swig_owner;
-#ifdef ZTS
-      // Store the ZTS context so it's available when C++ calls back to PHP.
-      void *** swig_zts_ctx;
-#endif
+
     public:
-      Director(zval *self TSRMLS_DC) : swig_self(self) {
-        TSRMLS_SET_CTX(swig_zts_ctx);
+      Director(zval *self) : swig_disown_flag(false) {
+        ZVAL_COPY_VALUE(&swig_self, self);
       }
 
-      static bool swig_is_overridden_method(char *cname, char *lc_fname TSRMLS_DC) {
-        zend_class_entry **ce;
-        zend_function *mptr;
+      ~Director() {
+        if (swig_disown_flag) {
+          Z_DELREF(swig_self);
+	}
+      }
 
-        if (zend_lookup_class(cname, strlen(cname), &ce TSRMLS_CC) != SUCCESS) {
-          return false;
+      void swig_disown() const {
+        if (!swig_disown_flag) {
+          swig_disown_flag = true;
+          Z_ADDREF(swig_self);
         }
-        if (zend_hash_find(&(*ce)->function_table, lc_fname, strlen(lc_fname) + 1, (void **) &mptr) != SUCCESS) {
-          return false;
-        }
-        // common.scope points to the declaring class
-        return strcmp(mptr->common.scope->name, cname);
+      }
+
+      static bool swig_is_overridden_method(const char *cname, zval *z) {
+        zend_string * cname_str = zend_string_init(cname, strlen(cname), 0);
+        zend_class_entry *ce = zend_lookup_class(cname_str);
+        zend_string_release(cname_str);
+        return ce == Z_OBJCE_P(z);
       }
 
       template <typename Type>
       void swig_acquire_ownership(Type *vptr) const {
         if (vptr) {
           swig_owner[vptr] = new GCItem_T<Type>(vptr);
+        }
+      }
+
+      void swig_acquire_ownership_obj(void *vptr, int own) const {
+        if (vptr && own) {
+          swig_owner[vptr] = new GCItem_Object(own);
         }
       }
   };
@@ -116,13 +132,13 @@ namespace Swig {
   protected:
     std::string swig_msg;
   public:
-    DirectorException(int code, const char *hdr, const char *msg TSRMLS_DC) : swig_msg(hdr) {
-      if (msg[0]) {
+    DirectorException(int code, const char *hdr, const char *msg) : swig_msg(hdr) {
+      if (msg && msg[0]) {
         swig_msg += " ";
         swig_msg += msg;
       }
-      SWIG_ErrorCode() = code;
-      SWIG_ErrorMsg() = swig_msg.c_str();
+      // Don't replace an already active PHP exception.
+      if (!EG(exception)) zend_throw_exception(NULL, swig_msg.c_str(), code);
     }
 
     virtual ~DirectorException() throw() {
@@ -132,39 +148,38 @@ namespace Swig {
       return swig_msg.c_str();
     }
 
-    static void raise(int code, const char *hdr, const char *msg TSRMLS_DC) {
-      throw DirectorException(code, hdr, msg TSRMLS_CC);
+    static void raise(int code, const char *hdr, const char *msg) {
+      throw DirectorException(code, hdr, msg);
     }
   };
 
   /* attempt to call a pure virtual method via a director method */
   class DirectorPureVirtualException : public DirectorException {
   public:
-    DirectorPureVirtualException(const char *msg TSRMLS_DC)
-      : DirectorException(E_ERROR, "SWIG director pure virtual method called", msg TSRMLS_CC) {
+    DirectorPureVirtualException(const char *msg)
+      : DirectorException(E_ERROR, "SWIG director pure virtual method called", msg) {
     }
 
-    static void raise(const char *msg TSRMLS_DC) {
-      throw DirectorPureVirtualException(msg TSRMLS_CC);
+    static void raise(const char *msg) {
+      throw DirectorPureVirtualException(msg);
     }
   };
 
   /* any php exception that occurs during a director method call */
-  class DirectorMethodException : public DirectorException
-  {
+  class DirectorMethodException : public DirectorException {
   public:
-    DirectorMethodException(const char *msg TSRMLS_DC)
-      : DirectorException(E_ERROR, "SWIG director method error", msg TSRMLS_CC) {
+    DirectorMethodException()
+      : DirectorException(E_ERROR, "SWIG director method error", NULL) {
     }
 
-    static void raise(const char *msg TSRMLS_DC) {
-      throw DirectorMethodException(msg TSRMLS_CC);
+    DirectorMethodException(const char *msg)
+      : DirectorException(E_ERROR, "SWIG director method error", msg) {
+    }
+
+    static void raise(const char *msg) {
+      throw DirectorMethodException(msg);
     }
   };
 }
-
-// DirectorMethodException() is documented to be callable with no parameters
-// so use a macro to insert TSRMLS_CC so any ZTS context gets passed.
-#define DirectorMethodException() DirectorMethodException("" TSRMLS_CC)
 
 #endif
