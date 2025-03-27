@@ -1,7 +1,12 @@
 /* Last error */
 static int SWIG_lasterror_code = 0;
 static char SWIG_lasterror_msg[1024];
-SWIGRUNTIME void SWIG_Error(int code, const char *format, ...) {
+SWIGRUNTIME void SWIG_Error(int code, const char *msg) {
+  SWIG_lasterror_code = code;
+  snprintf(SWIG_lasterror_msg, sizeof(SWIG_lasterror_msg), "%s", msg);
+}
+
+SWIGRUNTIME void SWIG_Error_Format(int code, const char *format, ...) {
   SWIG_lasterror_code = code;
   va_list arg;
   va_start(arg, format);
@@ -39,9 +44,9 @@ SWIGRUNTIME const char* SWIG_ErrorType(int code) {
 
 SWIGRUNTIME int SWIG_check_num_args(const char *func_name, int num_args, int max_args, int min_args, int varargs) {
   if (num_args > max_args && !varargs) {
-    SWIG_Error(SWIG_RuntimeError, "function %s takes at most %i arguments", func_name, max_args);
+    SWIG_Error_Format(SWIG_RuntimeError, "function %s takes at most %i arguments", func_name, max_args);
   } else if (num_args < min_args) {
-    SWIG_Error(SWIG_RuntimeError, "function %s requires at least %i arguments", func_name, min_args);
+    SWIG_Error_Format(SWIG_RuntimeError, "function %s requires at least %i arguments", func_name, min_args);
   } else {
     return 1;
   }
@@ -167,7 +172,7 @@ SWIGRUNTIME void SWIG_Matlab_Error(const char *message) {
 
 SWIGRUNTIME void SWIG_Matlab_ErrorId(const char *errorid, const char *message) {
 #ifdef HAVE_OCTAVE
-    mexErrMsgIdAndTxt(errorid, message);
+    mexErrMsgIdAndTxt(errorid, "%s", message);
 #else
     mxArray *msg = mxCreateString(message);
     mxArray *id  = mxCreateString(errorid);
