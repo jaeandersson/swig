@@ -189,6 +189,7 @@ Examples/test-suite/octave/octheaders.hpp.gch
 *.mex*
 [+]*/
 SwigRef.m
+SwigMem.m
 
 # Perl5
 Examples/test-suite/perl5/*.pm
