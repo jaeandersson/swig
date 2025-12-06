@@ -34,9 +34,9 @@ extern "C" {
   Language *swig_java(void);
   Language *swig_javascript(void);
   Language *swig_lua(void);
+  Language *swig_matlab(void);
   Language *swig_ocaml(void);
   Language *swig_octave(void);
-  Language *swig_matlab(void);
   Language *swig_perl5(void);
   Language *swig_php(void);
   Language *swig_python(void);
@@ -63,10 +63,10 @@ static TargetLanguageModule modules[] = {
   {"-java", swig_java, "Java", Supported},
   {"-javascript", swig_javascript, "Javascript", Supported},
   {"-lua", swig_lua, "Lua", Supported},
+  {"-matlab", swig_matlab, "Matlab", Experimental},
   {"-modula3", NULL, "Modula 3", Disabled},
   {"-ocaml", swig_ocaml, "OCaml", Experimental},
   {"-octave", swig_octave, "Octave", Supported},
-  {"-matlab", swig_matlab, "Matlab"},
   {"-perl", swig_perl5, NULL, Supported},
   {"-perl5", swig_perl5, "Perl 5", Supported},
   {"-php", swig_php, NULL, Supported},
