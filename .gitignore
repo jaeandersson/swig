@@ -187,9 +187,10 @@ Examples/test-suite/octave/octheaders.hpp.gch
 
 # Matlab
 *.mex*
-[+]*/
-SwigRef.m
-SwigMem.m
+Examples/test-suite/matlab/[+]*/
+Examples/test-suite/matlab/*setup.m
+Examples/test-suite/matlab/SwigRef.m
+Examples/test-suite/matlab/SwigMem.m
 
 # Perl5
 Examples/test-suite/perl5/*.pm
