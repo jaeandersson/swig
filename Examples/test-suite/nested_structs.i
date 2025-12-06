@@ -15,6 +15,10 @@
 #ifdef SWIGOCAML
 %warnfilter(SWIGWARN_PARSE_KEYWORD) val;
 #endif
+/* MATLAB/Octave not (always) case sensitive */
+#ifdef SWIGMATLAB
+%rename(outer_) outer;
+#endif
 
 // bug #491476
 %inline %{
