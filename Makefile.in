@@ -110,6 +110,7 @@ check-aliveness:
 	@$(skip-lua)      || ./$(TARGET) -lua        -help
 	@$(skip-ocaml)    || ./$(TARGET) -ocaml      -help
 	@$(skip-octave)   || ./$(TARGET) -octave     -help
+	@$(skip-matlab)   || ./$(TARGET) -matlab     -help
 	@$(skip-perl5)    || ./$(TARGET) -perl       -help
 	@$(skip-php)      || ./$(TARGET) -php7       -help
 	@$(skip-python)   || ./$(TARGET) -python     -help
@@ -133,6 +134,7 @@ check-versions:					\
 	check-lua-version			\
 	check-ocaml-version			\
 	check-octave-version			\
+	check-matlab-version			\
 	check-perl5-version			\
 	check-php-version			\
 	check-python-version			\
@@ -167,6 +169,7 @@ check-examples:					\
 	check-lua-examples			\
 	check-ocaml-examples			\
 	check-octave-examples			\
+	check-matlab-examples			\
 	check-perl5-examples			\
 	check-php-examples			\
 	check-python-examples			\
@@ -186,6 +189,7 @@ javascript_examples:=$(shell sed '/^\#/d' $(srcdir)/Examples/javascript/check.li
 lua_examples       :=$(shell sed '/^\#/d' $(srcdir)/Examples/lua/check.list)
 ocaml_examples     :=$(shell sed '/^\#/d' $(srcdir)/Examples/ocaml/check.list)
 octave_examples    :=$(shell sed '/^\#/d' $(srcdir)/Examples/octave/check.list)
+matlab_examples    :=$(shell sed '/^\#/d' $(srcdir)/Examples/matlab/check.list)
 perl5_examples     :=$(shell sed '/^\#/d' $(srcdir)/Examples/perl5/check.list)
 php_examples       :=$(shell sed '/^\#/d' $(srcdir)/Examples/php/check.list)
 python_examples    :=$(shell sed '/^\#/d' $(srcdir)/Examples/python/check.list)
@@ -242,6 +246,7 @@ check-test-suite:				\
 	check-lua-test-suite			\
 	check-ocaml-test-suite			\
 	check-octave-test-suite			\
+	check-matlab-test-suite			\
 	check-perl5-test-suite			\
 	check-php-test-suite			\
 	check-python-test-suite			\
@@ -289,6 +294,7 @@ all-test-suite:					\
 	all-lua-test-suite			\
 	all-ocaml-test-suite			\
 	all-octave-test-suite			\
+	all-matlab-test-suite			\
 	all-perl5-test-suite			\
 	all-php-test-suite			\
 	all-python-test-suite			\
@@ -312,6 +318,7 @@ broken-test-suite:				\
 	broken-lua-test-suite			\
 	broken-ocaml-test-suite			\
 	broken-octave-test-suite		\
+	broken-matlab-test-suite		\
 	broken-perl5-test-suite			\
 	broken-php-test-suite			\
 	broken-python-test-suite		\
@@ -450,7 +457,7 @@ install-main:
 	@$(INSTALL_PROGRAM) $(TARGET) $(DESTDIR)$(BIN_DIR)/`echo $(TARGET_NOEXE) | sed '$(transform)'`@EXEEXT@
 
 lib-languages = typemaps tcl perl5 python guile java ruby php ocaml octave \
-	csharp lua r c go d javascript javascript/jsc \
+	matlab csharp lua r c go d javascript javascript/jsc \
 	javascript/v8 javascript/napi scilab xml
 
 lib-modules = std
