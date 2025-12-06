@@ -185,6 +185,11 @@ Examples/test-suite/octave/*.oct
 Examples/test-suite/octave/octheaders.hpp
 Examples/test-suite/octave/octheaders.hpp.gch
 
+# Matlab
+*.mex*
+[+]*/
+SwigRef.m
+
 # Perl5
 Examples/test-suite/perl5/*.pm
 Examples/perl5/*/*.pm
