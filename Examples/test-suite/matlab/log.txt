@@ -1,0 +1,86 @@
+if [ -f ./director_basic_runme ]; then echo "checking matlab testcase director_basic (with run test)" ; else echo "checking matlab testcase director_basic" ; fi;
+checking matlab testcase director_basic
+make -f ../../../Examples/Makefile SRCDIR="./" CXXSRCS="" SWIG_LIB="../../../Lib" SWIG=" ../../../preinst-swig" INCLUDES="-I../../../Examples/test-suite" SWIGOPT="-outcurrentdir -I../../../Examples/test-suite" NOLINK=true TARGET="director_basic" INTERFACEDIR="../" INTERFACE="director_basic.i" matlab_cpp
+make[1]: Entering directory '/home/jgillis/programs/swig/Examples/test-suite/matlab'
+../../../preinst-swig -c++ -matlab -outcurrentdir -I../../../Examples/test-suite -o director_basic_wrap.cxx ./../director_basic.i
+/usr/local/MATLAB/R2014b/bin/mex -g -I. -I./ CXXFLAGS='$CXXFLAGS -I/include/boost-0 ' director_basic_wrap.cxx  \
+	 -I../../../Examples/test-suite  -output director_basic_wrap
+Building with 'g++'.
+Warning: You are using gcc version '4.9.2'. The version of gcc is not supported. The version currently supported with MEX is '4.7.x'. For a list of currently supported compilers see: http://www.mathworks.com/support/compilers/current_release.
+Warning: You are using gcc version '4.9.2-10)'. The version of gcc is not supported. The version currently supported with MEX is '4.7.x'. For a list of currently supported compilers see: http://www.mathworks.com/support/compilers/current_release.
+MEX completed successfully.
+make[1]: Leaving directory '/home/jgillis/programs/swig/Examples/test-suite/matlab'
+if [ -f ./director_basic_runme.m ]; then RUNSCRIPT=" try; director_basic_runme; catch err; fprintf(1, ['ERROR: ' err.message '\\\n']); fprintf(2, ['ERROR: ' err.message '\\\n']); exit(1); end; exit(0)" ; env LD_LIBRARY_PATH=.:$LD_LIBRARY_PATH MATLABPATH=.:.:$MATLAB_PATH  /usr/local/bin/matlab -nodisplay -nosplash -nojvm -r "$RUNSCRIPT"  ; if [ $? -ne 0 ] ; then echo "\ndirector_basic failed"  ; else echo "\ndirector_basic passed"  ; fi fi
+[?1h=
+                                                                                                           < M A T L A B (R) >
+                                                                                                 Copyright 1984-2014 The MathWorks, Inc.
+                                                                                                  R2014b (8.4.0.150421) 64-bit (glnxa64)
+                                                                                                            September 15, 2014
+
+[Warning: Duplicate directory name: .] 
+[Warning: Duplicate directory name: .] 
+ 
+For online documentation, see http://www.mathworks.com/support
+For product information, visit www.mathworks.com.
+ 
+gateway -1609598384 -1609598944
+calling 1
+
+Bar instance new: 0x7f83926a3860
+gateway -1609604208 -1609604096
+calling 1
+
+self = 
+
+<Swig object, ind=2>
+gateway -1609605776 -1609605664
+calling 1
+SWIG_Matlab_ConvertPtrAndOwn(2)
+SWIG_Matlab_ConvertPtrAndOwn( -1872695840 )
+in delete _wrap_MyClass_get_self? -1872700368here _wrap_MyClass_get_self? -1872700368gateway -1609607680 -1609607120
+
+Bar instance new: 0x7f839f7c0fc0
+calling 2
+SWIG_Matlab_ConvertPtrAndOwn(3)
+SWIG_Matlab_ConvertPtrAndOwn( -1872695816 )
+SWIG_Matlab_ConvertPtrAndOwn(1)
+SWIG_Matlab_ConvertPtrAndOwn( -1872695864 )
+in delete _wrap_MyClass_cmethod? -1872700368
+Bar instance new: 0x7f839f7c0f00
+!getswigdirectorstorage: swigdirector_basicdirectorstorage!getswigdirectorstorage: swigdirector_basicdirectorstorageI am in vmethod -1609608800
+!getswigdirectorstorage: swigdirector_basicdirectorstoragegateway -1609609472 -1609608912
+
+Bar instance new: 0x7f839f7bee40
+
+Bar instance new: 0x7f839f7bee20
+calling 2
+SWIG_Matlab_ConvertPtrAndOwn(2)
+SWIG_Matlab_ConvertPtrAndOwn( -1874575776 )
+SWIG_Matlab_ConvertPtrAndOwn(4)
+SWIG_Matlab_ConvertPtrAndOwn( -1874575728 )
+I am in __wrap_MyClass_vmethod: upcall 1 -- -1872700360 -- -1872700360 - -1609608912
+in delete _wrap_MyClass_vmethod? -1872700368
+Bar instance del: 0x7f839f7bee50
+
+Bar instance del: 0x7f839f7bee60
+here _wrap_MyClass_vmethod? -1872700368
+Bar instance del: 0x7f839f7bee20
+
+Bar instance del: 0x7f839f7bee40
+SWIG_Matlab_ConvertPtrAndOwn(5)
+SWIG_Matlab_ConvertPtrAndOwn( -1874575704 )
+
+Bar instance del: 0x7f839f7c0f00
+
+Bar instance del: 0x7f839f7c0f70
+
+Bar instance del: 0x7f839f7c0fe0
+here _wrap_MyClass_cmethod? -1872700368
+Bar instance del: 0x7f839f7c0fc0
+gateway -1609609248 -1609609136
+calling 1
+SWIG_Matlab_ConvertPtrAndOwn(4)
+SWIG_Matlab_ConvertPtrAndOwn( -1874575728 )
+SWIG_Matlab_DeletePointer(4)SWIG_Matlab_DeletePointer( -1874575728, -1619259536 )in delete _wrap_delete_Bar? -1619259536
+Bar instance del: 0x7f839f7c0f70
+Makefile:81: recipe for target 'director_basic.cpptest' failed

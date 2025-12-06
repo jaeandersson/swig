@@ -1,0 +1,1 @@
+% This is the setup script for li_std_combinations.

@@ -1,0 +1,904 @@
+partialchecking matlab test-suite
+partialchecking matlab testcase abstract_access
+
+abstract_access passed
+partialchecking matlab testcase abstract_inherit
+partialchecking matlab testcase abstract_inherit_ok
+partialchecking matlab testcase abstract_signature
+partialchecking matlab testcase abstract_typedef
+
+abstract_typedef passed
+partialchecking matlab testcase abstract_typedef2
+
+abstract_typedef2 passed
+partialchecking matlab testcase abstract_virtual
+
+abstract_virtual passed
+partialchecking matlab testcase access_change
+partialchecking matlab testcase add_link
+partialchecking matlab testcase aggregate
+partialchecking matlab testcase allowexcept
+partialchecking matlab testcase allprotected
+partialchecking matlab testcase allprotected_not
+partialchecking matlab testcase anonymous_bitfield
+partialchecking matlab testcase apply_signed_char
+partialchecking matlab testcase apply_strings
+partialchecking matlab testcase argout
+partialchecking matlab testcase array_member
+
+array_member passed
+partialchecking matlab testcase array_typedef_memberin
+partialchecking matlab testcase arrayref
+partialchecking matlab testcase arrays_dimensionless
+partialchecking matlab testcase arrays_global
+
+arrays_global passed
+partialchecking matlab testcase arrays_global_twodim
+partialchecking matlab testcase arrays_scope
+partialchecking matlab testcase autodoc
+partialchecking matlab testcase bloody_hell
+partialchecking matlab testcase bools
+partialchecking matlab testcase catches
+partialchecking matlab testcase cast_operator
+partialchecking matlab testcase casts
+partialchecking matlab testcase char_binary
+partialchecking matlab testcase char_strings
+partialchecking matlab testcase class_forward
+partialchecking matlab testcase class_ignore
+
+class_ignore passed
+partialchecking matlab testcase class_scope_weird
+
+class_scope_weird passed
+partialchecking matlab testcase compactdefaultargs
+
+compactdefaultargs passed
+partialchecking matlab testcase const_const_2
+partialchecking matlab testcase constant_directive
+partialchecking matlab testcase constant_pointers
+partialchecking matlab testcase constover
+
+constover passed
+partialchecking matlab testcase constructor_copy
+
+constructor_copy passed
+partialchecking matlab testcase constructor_exception
+partialchecking matlab testcase constructor_explicit
+partialchecking matlab testcase constructor_ignore
+partialchecking matlab testcase constructor_rename
+partialchecking matlab testcase constructor_value
+partialchecking matlab testcase contract
+
+contract passed
+partialchecking matlab testcase conversion
+partialchecking matlab testcase conversion_namespace
+partialchecking matlab testcase conversion_ns_template
+partialchecking matlab testcase cplusplus_throw
+partialchecking matlab testcase cpp_basic
+Warning: invalid MATLAB symbol '__str__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__str__) __str__;
+Warning: invalid MATLAB symbol '__str__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__str__) __str__;
+partialchecking matlab testcase cpp_enum
+
+cpp_enum passed
+partialchecking matlab testcase cpp_namespace
+
+cpp_namespace passed
+partialchecking matlab testcase cpp_nodefault
+partialchecking matlab testcase cpp_static
+partialchecking matlab testcase cpp_typedef
+partialchecking matlab testcase curiously_recurring_template_pattern
+partialchecking matlab testcase default_args
+
+default_args passed
+partialchecking matlab testcase default_arg_values
+partialchecking matlab testcase default_constructor
+
+default_constructor passed
+partialchecking matlab testcase defvalue_constructor
+partialchecking matlab testcase derived_byvalue
+partialchecking matlab testcase derived_nested
+partialchecking matlab testcase destructor_reprotected
+partialchecking matlab testcase director_abstract
+
+director_abstract passed
+partialchecking matlab testcase director_alternating
+partialchecking matlab testcase director_basic
+
+director_basic passed
+partialchecking matlab testcase director_property
+partialchecking matlab testcase director_binary_string
+partialchecking matlab testcase director_classes
+partialchecking matlab testcase director_classic
+
+director_classic passed
+partialchecking matlab testcase director_constructor
+partialchecking matlab testcase director_default
+
+director_default passed
+partialchecking matlab testcase director_detect
+
+director_detect passed
+partialchecking matlab testcase director_enum
+
+director_enum passed
+partialchecking matlab testcase director_exception
+partialchecking matlab testcase director_extend
+
+director_extend passed
+partialchecking matlab testcase director_finalizer
+partialchecking matlab testcase director_frob
+Warning: invalid MATLAB symbol '_eye' (variable)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_eye) _eye;
+Warning: invalid MATLAB symbol '_at' (variable)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_at) _at;
+Warning: invalid MATLAB symbol '_eye' (variable)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_eye) _eye;
+Warning: invalid MATLAB symbol '_at' (variable)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_at) _at;
+
+director_frob passed
+partialchecking matlab testcase director_ignore
+partialchecking matlab testcase director_keywords
+partialchecking matlab testcase director_namespace_clash
+partialchecking matlab testcase director_nspace
+partialchecking matlab testcase director_nspace_director_name_collision
+partialchecking matlab testcase director_nested
+
+director_nested passed
+partialchecking matlab testcase director_overload
+partialchecking matlab testcase director_overload2
+partialchecking matlab testcase director_primitives
+partialchecking matlab testcase director_protected
+partialchecking matlab testcase director_protected_overloaded
+partialchecking matlab testcase director_redefined
+partialchecking matlab testcase director_smartptr
+partialchecking matlab testcase director_thread
+partialchecking matlab testcase director_unroll
+
+director_unroll passed
+partialchecking matlab testcase director_using
+partialchecking matlab testcase director_wombat
+partialchecking matlab testcase disown
+partialchecking matlab testcase dynamic_cast
+
+dynamic_cast passed
+partialchecking matlab testcase empty
+
+empty passed
+partialchecking matlab testcase enum_ignore
+partialchecking matlab testcase enum_plus
+partialchecking matlab testcase enum_rename
+partialchecking matlab testcase enum_scope_template
+partialchecking matlab testcase enum_template
+
+enum_template passed
+partialchecking matlab testcase enum_thorough
+partialchecking matlab testcase enum_var
+partialchecking matlab testcase equality
+partialchecking matlab testcase evil_diamond
+partialchecking matlab testcase evil_diamond_ns
+partialchecking matlab testcase evil_diamond_prop
+Warning: invalid MATLAB symbol '_foo' (variable)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_foo) _foo;
+Warning: invalid MATLAB symbol '_bar' (variable)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_bar) _bar;
+Warning: invalid MATLAB symbol '_baz' (variable)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_baz) _baz;
+Warning: invalid MATLAB symbol '_spam' (variable)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_spam) _spam;
+partialchecking matlab testcase exception_order
+
+exception_order passed
+partialchecking matlab testcase extend
+partialchecking matlab testcase extend_constructor_destructor
+partialchecking matlab testcase extend_default
+partialchecking matlab testcase extend_placement
+
+extend_placement passed
+partialchecking matlab testcase extend_special_variables
+partialchecking matlab testcase extend_template
+
+extend_template passed
+partialchecking matlab testcase extend_template_ns
+
+extend_template_ns passed
+partialchecking matlab testcase extend_typedef_class
+partialchecking matlab testcase extern_c
+partialchecking matlab testcase extern_namespace
+partialchecking matlab testcase extern_throws
+partialchecking matlab testcase expressions
+partialchecking matlab testcase features
+partialchecking matlab testcase fragments
+partialchecking matlab testcase friends
+
+friends passed
+partialchecking matlab testcase funcptr_cpp
+partialchecking matlab testcase fvirtual
+
+fvirtual passed
+partialchecking matlab testcase global_namespace
+partialchecking matlab testcase global_ns_arg
+
+global_ns_arg passed
+partialchecking matlab testcase global_scope_types
+partialchecking matlab testcase global_vars
+partialchecking matlab testcase grouping
+
+grouping passed
+partialchecking matlab testcase ignore_parameter
+partialchecking matlab testcase import_nomodule
+
+import_nomodule passed
+partialchecking matlab testcase inherit
+partialchecking matlab testcase inherit_missing
+
+inherit_missing passed
+partialchecking matlab testcase inherit_same_name
+partialchecking matlab testcase inherit_target_language
+partialchecking matlab testcase inherit_void_arg
+partialchecking matlab testcase inline_initializer
+partialchecking matlab testcase insert_directive
+partialchecking matlab testcase keyword_rename
+partialchecking matlab testcase kind
+partialchecking matlab testcase kwargs_feature
+partialchecking matlab testcase langobj
+partialchecking matlab testcase li_attribute
+
+li_attribute passed
+partialchecking matlab testcase li_attribute_template
+partialchecking matlab testcase li_boost_shared_ptr
+partialchecking matlab testcase li_boost_shared_ptr_bits
+partialchecking matlab testcase li_boost_shared_ptr_template
+partialchecking matlab testcase li_boost_shared_ptr_attribute
+partialchecking matlab testcase li_carrays
+
+li_carrays passed
+partialchecking matlab testcase li_cdata
+partialchecking matlab testcase li_cpointer
+
+li_cpointer passed
+partialchecking matlab testcase li_std_auto_ptr
+partialchecking matlab testcase li_stdint
+partialchecking matlab testcase li_swigtype_inout
+partialchecking matlab testcase li_typemaps
+partialchecking matlab testcase li_typemaps_apply
+partialchecking matlab testcase li_windows
+partialchecking matlab testcase long_long_apply
+partialchecking matlab testcase memberin_extend
+partialchecking matlab testcase member_funcptr_galore
+partialchecking matlab testcase member_pointer
+
+member_pointer passed
+partialchecking matlab testcase member_template
+partialchecking matlab testcase minherit
+
+minherit passed
+partialchecking matlab testcase minherit2
+partialchecking matlab testcase mixed_types
+partialchecking matlab testcase multiple_inheritance
+partialchecking matlab testcase name_cxx
+partialchecking matlab testcase name_warnings
+partialchecking matlab testcase namespace_class
+
+namespace_class passed
+partialchecking matlab testcase namespace_enum
+partialchecking matlab testcase namespace_extend
+partialchecking matlab testcase namespace_forward_declaration
+partialchecking matlab testcase namespace_nested
+partialchecking matlab testcase namespace_spaces
+partialchecking matlab testcase namespace_template
+partialchecking matlab testcase namespace_typedef_class
+partialchecking matlab testcase namespace_typemap
+
+namespace_typemap passed
+partialchecking matlab testcase namespace_union
+partialchecking matlab testcase namespace_virtual_method
+
+namespace_virtual_method passed
+partialchecking matlab testcase nspace
+partialchecking matlab testcase nspace_extend
+partialchecking matlab testcase naturalvar
+
+naturalvar passed
+partialchecking matlab testcase naturalvar_more
+partialchecking matlab testcase naturalvar_onoff
+partialchecking matlab testcase nested_class
+partialchecking matlab testcase nested_directors
+partialchecking matlab testcase nested_comment
+partialchecking matlab testcase nested_scope
+partialchecking matlab testcase nested_template_base
+partialchecking matlab testcase nested_workaround
+partialchecking matlab testcase newobject1
+partialchecking matlab testcase null_pointer
+
+null_pointer passed
+partialchecking matlab testcase operator_overload
+Warning: invalid MATLAB symbol '__rsub__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__rsub__) __rsub__;
+Warning: invalid MATLAB symbol '__str__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__str__) __str__;
+Warning: invalid MATLAB symbol '__getitem__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__getitem__) __getitem__;
+Warning: invalid MATLAB symbol '__setitem__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__setitem__) __setitem__;
+partialchecking matlab testcase operator_overload_break
+Warning: invalid MATLAB symbol '__rsub__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__rsub__) __rsub__;
+partialchecking matlab testcase operator_pointer_ref
+partialchecking matlab testcase operbool
+partialchecking matlab testcase ordering
+partialchecking matlab testcase overload_bool
+partialchecking matlab testcase overload_copy
+
+overload_copy passed
+partialchecking matlab testcase overload_extend
+
+overload_extend passed
+partialchecking matlab testcase overload_method
+partialchecking matlab testcase overload_numeric
+partialchecking matlab testcase overload_polymorphic
+partialchecking matlab testcase overload_rename
+
+overload_rename passed
+partialchecking matlab testcase overload_return_type
+partialchecking matlab testcase overload_simple
+
+overload_simple passed
+partialchecking matlab testcase overload_subtype
+
+overload_subtype passed
+partialchecking matlab testcase overload_template
+
+overload_template passed
+partialchecking matlab testcase overload_template_fast
+
+overload_template_fast passed
+partialchecking matlab testcase pointer_reference
+partialchecking matlab testcase preproc_constants
+
+preproc_constants passed
+partialchecking matlab testcase primitive_ref
+
+primitive_ref passed
+partialchecking matlab testcase private_assign
+partialchecking matlab testcase protected_rename
+partialchecking matlab testcase pure_virtual
+partialchecking matlab testcase redefined
+partialchecking matlab testcase redefined_not
+partialchecking matlab testcase refcount
+
+refcount passed
+partialchecking matlab testcase reference_global_vars
+
+reference_global_vars passed
+partialchecking matlab testcase register_par
+partialchecking matlab testcase rename1
+partialchecking matlab testcase rename2
+partialchecking matlab testcase rename3
+partialchecking matlab testcase rename4
+partialchecking matlab testcase rename_scope
+
+rename_scope passed
+partialchecking matlab testcase rename_simple
+partialchecking matlab testcase rename_strip_encoder
+partialchecking matlab testcase rename_pcre_encoder
+partialchecking matlab testcase rename_pcre_enum
+partialchecking matlab testcase rename_predicates
+partialchecking matlab testcase restrict_cplusplus
+partialchecking matlab testcase return_const_value
+Warning: invalid MATLAB symbol '_val' (variable)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_val) _val;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '_val' (variable)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_val) _val;
+
+return_const_value passed
+partialchecking matlab testcase return_value_scope
+partialchecking matlab testcase rname
+partialchecking matlab testcase samename
+
+samename passed
+partialchecking matlab testcase sizet
+partialchecking matlab testcase smart_pointer_const
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+partialchecking matlab testcase smart_pointer_const2
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+partialchecking matlab testcase smart_pointer_const_overload
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+partialchecking matlab testcase smart_pointer_extend
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+
+smart_pointer_extend passed
+partialchecking matlab testcase smart_pointer_member
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+
+smart_pointer_member passed
+partialchecking matlab testcase smart_pointer_multi
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+
+smart_pointer_multi passed
+partialchecking matlab testcase smart_pointer_multi_typedef
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+
+smart_pointer_multi_typedef passed
+partialchecking matlab testcase smart_pointer_namespace
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+partialchecking matlab testcase smart_pointer_namespace2
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+partialchecking matlab testcase smart_pointer_not
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+
+smart_pointer_not passed
+partialchecking matlab testcase smart_pointer_overload
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+
+smart_pointer_overload passed
+partialchecking matlab testcase smart_pointer_protected
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+partialchecking matlab testcase smart_pointer_rename
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+
+smart_pointer_rename passed
+partialchecking matlab testcase smart_pointer_simple
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+
+smart_pointer_simple passed
+partialchecking matlab testcase smart_pointer_static
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+partialchecking matlab testcase smart_pointer_template_const_overload
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+partialchecking matlab testcase smart_pointer_template_defaults_overload
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+partialchecking matlab testcase smart_pointer_templatemethods
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+partialchecking matlab testcase smart_pointer_templatevariables
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+
+smart_pointer_templatevariables passed
+partialchecking matlab testcase smart_pointer_typedef
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+
+smart_pointer_typedef passed
+partialchecking matlab testcase special_variables
+partialchecking matlab testcase special_variable_macros
+partialchecking matlab testcase static_array_member
+partialchecking matlab testcase static_const_member
+partialchecking matlab testcase static_const_member_2
+
+static_const_member_2 passed
+partialchecking matlab testcase struct_initialization_cpp
+partialchecking matlab testcase struct_value
+
+struct_value passed
+partialchecking matlab testcase symbol_clash
+partialchecking matlab testcase template_arg_replace
+partialchecking matlab testcase template_arg_scope
+partialchecking matlab testcase template_arg_typename
+partialchecking matlab testcase template_array_numeric
+partialchecking matlab testcase template_basic
+partialchecking matlab testcase template_base_template
+partialchecking matlab testcase template_classes
+partialchecking matlab testcase template_const_ref
+partialchecking matlab testcase template_construct
+
+template_construct passed
+partialchecking matlab testcase template_templated_constructors
+partialchecking matlab testcase template_default
+partialchecking matlab testcase template_default2
+*** Internal error. Inconsistent clientdata for type 'oss::Module< oss::traits,oss::UnaryPolarization,oss::Interface_tpl< oss::UnaryPolarization > > *'
+*** '"template_default2.Module_UP2"' != '"template_default2.Module_UP1"'
+swig: Swig/typesys.c:1629: SwigType_remember_clientdata: Assertion `0' failed.
+../../../Examples/Makefile:496: recipe for target 'matlab_cpp' failed
+make[4]: *** [matlab_cpp] Aborted
+Makefile:81: recipe for target 'template_default2.cpptest' failed
+make[3]: *** [template_default2.cpptest] Error 2
+partialchecking matlab testcase template_default_arg
+
+template_default_arg passed
+partialchecking matlab testcase template_default_arg_virtual_destructor
+partialchecking matlab testcase template_default_class_parms
+partialchecking matlab testcase template_default_class_parms_typedef
+partialchecking matlab testcase template_default_inherit
+partialchecking matlab testcase template_default_qualify
+partialchecking matlab testcase template_default_vw
+partialchecking matlab testcase template_enum
+partialchecking matlab testcase template_enum_ns_inherit
+partialchecking matlab testcase template_enum_typedef
+partialchecking matlab testcase template_explicit
+partialchecking matlab testcase template_extend1
+
+template_extend1 passed
+partialchecking matlab testcase template_extend2
+
+template_extend2 passed
+partialchecking matlab testcase template_extend_overload
+partialchecking matlab testcase template_extend_overload_2
+partialchecking matlab testcase template_forward
+partialchecking matlab testcase template_inherit
+
+template_inherit passed
+partialchecking matlab testcase template_inherit_abstract
+partialchecking matlab testcase template_int_const
+partialchecking matlab testcase template_methods
+partialchecking matlab testcase template_namespace_forward_declaration
+partialchecking matlab testcase template_using_directive_and_declaration_forward
+partialchecking matlab testcase template_nested
+partialchecking matlab testcase template_nested_typemaps
+partialchecking matlab testcase template_ns
+
+template_ns passed
+partialchecking matlab testcase template_ns2
+partialchecking matlab testcase template_ns3
+partialchecking matlab testcase template_ns4
+
+template_ns4 passed
+partialchecking matlab testcase template_ns_enum
+partialchecking matlab testcase template_ns_enum2
+partialchecking matlab testcase template_ns_inherit
+partialchecking matlab testcase template_ns_scope
+partialchecking matlab testcase template_partial_arg
+partialchecking matlab testcase template_partial_specialization
+partialchecking matlab testcase template_partial_specialization_typedef
+partialchecking matlab testcase template_qualifier
+partialchecking matlab testcase template_ref_type
+Warning: invalid MATLAB symbol '_i' (variable)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_i) _i;
+
+template_ref_type passed
+partialchecking matlab testcase template_rename
+
+template_rename passed
+partialchecking matlab testcase template_retvalue
+partialchecking matlab testcase template_specialization
+partialchecking matlab testcase template_specialization_defarg
+*** Internal error. Inconsistent clientdata for type 'C< double,double > *'
+*** '"template_specialization_defarg.C_d"' != '"template_specialization_defarg.C_dd"'
+swig: Swig/typesys.c:1629: SwigType_remember_clientdata: Assertion `0' failed.
+../../../Examples/Makefile:496: recipe for target 'matlab_cpp' failed
+make[4]: *** [matlab_cpp] Aborted
+Makefile:81: recipe for target 'template_specialization_defarg.cpptest' failed
+make[3]: *** [template_specialization_defarg.cpptest] Error 2
+partialchecking matlab testcase template_specialization_enum
+partialchecking matlab testcase template_static
+
+template_static passed
+partialchecking matlab testcase template_tbase_template
+
+template_tbase_template passed
+partialchecking matlab testcase template_template_parameters
+partialchecking matlab testcase template_typedef
+
+template_typedef passed
+partialchecking matlab testcase template_typedef_class_template
+partialchecking matlab testcase template_typedef_cplx
+
+template_typedef_cplx passed
+partialchecking matlab testcase template_typedef_cplx2
+
+template_typedef_cplx2 passed
+partialchecking matlab testcase template_typedef_cplx3
+
+template_typedef_cplx3 passed
+partialchecking matlab testcase template_typedef_cplx4
+
+template_typedef_cplx4 passed
+partialchecking matlab testcase template_typedef_cplx5
+partialchecking matlab testcase template_typedef_funcptr
+partialchecking matlab testcase template_typedef_inherit
+partialchecking matlab testcase template_typedef_ns
+partialchecking matlab testcase template_typedef_ptr
+partialchecking matlab testcase template_typedef_rec
+partialchecking matlab testcase template_typedef_typedef
+partialchecking matlab testcase template_typemaps
+partialchecking matlab testcase template_typemaps_typedef
+partialchecking matlab testcase template_typemaps_typedef2
+partialchecking matlab testcase template_using
+partialchecking matlab testcase template_virtual
+partialchecking matlab testcase template_whitespace
+partialchecking matlab testcase threads
+partialchecking matlab testcase threads_exception
+partialchecking matlab testcase throw_exception
+partialchecking matlab testcase typedef_array_member
+partialchecking matlab testcase typedef_class
+
+typedef_class passed
+partialchecking matlab testcase typedef_funcptr
+partialchecking matlab testcase typedef_inherit
+
+typedef_inherit passed
+partialchecking matlab testcase typedef_mptr
+partialchecking matlab testcase typedef_reference
+partialchecking matlab testcase typedef_scope
+
+typedef_scope passed
+partialchecking matlab testcase typedef_sizet
+partialchecking matlab testcase typedef_struct
+partialchecking matlab testcase typedef_typedef
+partialchecking matlab testcase typemap_arrays
+partialchecking matlab testcase typemap_array_qualifiers
+partialchecking matlab testcase typemap_delete
+partialchecking matlab testcase typemap_directorout
+partialchecking matlab testcase typemap_global_scope
+partialchecking matlab testcase typemap_manyargs
+partialchecking matlab testcase typemap_namespace
+
+typemap_namespace passed
+partialchecking matlab testcase typemap_ns_using
+Warning: invalid MATLAB symbol '_FooImpl' ()
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_FooImpl) _FooImpl;
+
+typemap_ns_using passed
+partialchecking matlab testcase typemap_numinputs
+partialchecking matlab testcase typemap_template
+partialchecking matlab testcase typemap_template_parm_typedef
+partialchecking matlab testcase typemap_out_optimal
+partialchecking matlab testcase typemap_qualifier_strip
+partialchecking matlab testcase typemap_variables
+partialchecking matlab testcase typemap_various
+Warning: invalid MATLAB symbol '_x2' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_x2) _x2;
+Warning: invalid MATLAB symbol '_3' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_3) _3;
+partialchecking matlab testcase typename
+
+typename passed
+partialchecking matlab testcase types_directive
+
+types_directive passed
+partialchecking matlab testcase unicode_strings
+partialchecking matlab testcase union_scope
+partialchecking matlab testcase using1
+Warning: invalid MATLAB symbol '_FooImpl' ()
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_FooImpl) _FooImpl;
+
+using1 passed
+partialchecking matlab testcase using2
+Warning: invalid MATLAB symbol '_FooImpl' ()
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_FooImpl) _FooImpl;
+
+using2 passed
+partialchecking matlab testcase using_composition
+
+using_composition passed
+partialchecking matlab testcase using_directive_and_declaration
+partialchecking matlab testcase using_directive_and_declaration_forward
+partialchecking matlab testcase using_extend
+
+using_extend passed
+partialchecking matlab testcase using_inherit
+
+using_inherit passed
+partialchecking matlab testcase using_namespace
+partialchecking matlab testcase using_namespace_loop
+partialchecking matlab testcase using_pointers
+partialchecking matlab testcase using_private
+
+using_private passed
+partialchecking matlab testcase using_protected
+
+using_protected passed
+partialchecking matlab testcase valuewrapper
+partialchecking matlab testcase valuewrapper_base
+partialchecking matlab testcase valuewrapper_const
+partialchecking matlab testcase valuewrapper_opaque
+partialchecking matlab testcase varargs
+
+varargs passed
+partialchecking matlab testcase varargs_overload
+partialchecking matlab testcase virtual_destructor
+partialchecking matlab testcase virtual_poly
+
+virtual_poly passed
+partialchecking matlab testcase virtual_vs_nonvirtual_base
+partialchecking matlab testcase voidtest
+
+voidtest passed
+partialchecking matlab testcase wallkw
+Warning: invalid MATLAB symbol '_delegate' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_delegate) _delegate;
+Warning: invalid MATLAB symbol '_pass' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_pass) _pass;
+Warning: invalid MATLAB symbol '_alias' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u_alias) _alias;
+partialchecking matlab testcase wrapmacro
+
+wrapmacro passed
+partialchecking matlab testcase director_string
+
+director_string passed
+partialchecking matlab testcase ignore_template_constructor
+partialchecking matlab testcase li_std_combinations
+partialchecking matlab testcase li_std_deque
+partialchecking matlab testcase li_std_except
+partialchecking matlab testcase li_std_except_as_class
+partialchecking matlab testcase li_std_map
+partialchecking matlab testcase li_std_pair
+partialchecking matlab testcase li_std_pair_using
+partialchecking matlab testcase li_std_string
+partialchecking matlab testcase li_std_vector
+
+li_std_vector passed
+partialchecking matlab testcase li_std_vector_enum
+
+li_std_vector_enum passed
+partialchecking matlab testcase li_std_vector_member_var
+partialchecking matlab testcase smart_pointer_inherit
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+Warning: invalid MATLAB symbol '__deref__' (function)
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__deref__) __deref__;
+partialchecking matlab testcase template_typedef_fnc
+partialchecking matlab testcase template_type_namespace
+
+template_type_namespace passed
+partialchecking matlab testcase template_opaque
+
+template_opaque passed
+partialchecking matlab testcase arrays
+partialchecking matlab testcase bom_utf8
+partialchecking matlab testcase c_delete
+partialchecking matlab testcase c_delete_function
+partialchecking matlab testcase char_constant
+partialchecking matlab testcase const_const
+partialchecking matlab testcase constant_expr
+partialchecking matlab testcase empty
+
+empty passed
+partialchecking matlab testcase enums
+
+enums passed
+partialchecking matlab testcase enum_forward
+partialchecking matlab testcase enum_macro
+partialchecking matlab testcase enum_missing
+partialchecking matlab testcase extern_declaration
+partialchecking matlab testcase funcptr
+partialchecking matlab testcase function_typedef
+partialchecking matlab testcase global_functions
+partialchecking matlab testcase immutable_values
+partialchecking matlab testcase inctest
+
+inctest passed
+partialchecking matlab testcase infinity
+partialchecking matlab testcase integers
+partialchecking matlab testcase keyword_rename
+partialchecking matlab testcase lextype
+partialchecking matlab testcase li_carrays
+
+li_carrays passed
+partialchecking matlab testcase li_cdata
+partialchecking matlab testcase li_cmalloc
+
+li_cmalloc passed
+partialchecking matlab testcase li_constraints
+partialchecking matlab testcase li_cpointer
+
+li_cpointer passed
+partialchecking matlab testcase li_math
+partialchecking matlab testcase long_long
+partialchecking matlab testcase memberin_extend_c
+partialchecking matlab testcase name
+partialchecking matlab testcase nested
+partialchecking matlab testcase nested_extend_c
+partialchecking matlab testcase nested_structs
+
+nested_structs passed
+partialchecking matlab testcase newobject2
+partialchecking matlab testcase overload_extend
+
+overload_extend passed
+partialchecking matlab testcase overload_extendc
+
+overload_extendc passed
+partialchecking matlab testcase preproc
+Warning: invalid MATLAB symbol '__GMP_HAVE_CONST' ()
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__GMP_HAVE_CONST) __GMP_HAVE_CONST;
+Warning: invalid MATLAB symbol '__GMP_HAVE_PROTOTYPES' ()
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__GMP_HAVE_PROTOTYPES) __GMP_HAVE_PROTOTYPES;
+Warning: invalid MATLAB symbol '__GMP_HAVE_TOKEN_PASTE' ()
+  Symbols may not start with '_'.  Maybe try something like this: %rename(u__GMP_HAVE_TOKEN_PASTE) __GMP_HAVE_TOKEN_PASTE;
+
+preproc passed
+partialchecking matlab testcase preproc_constants_c
+partialchecking matlab testcase preproc_defined
+partialchecking matlab testcase preproc_include
+partialchecking matlab testcase preproc_line_file
+partialchecking matlab testcase ret_by_value
+
+ret_by_value passed
+partialchecking matlab testcase simple_array
+partialchecking matlab testcase sizeof_pointer
+partialchecking matlab testcase sneaky1
+
+sneaky1 passed
+partialchecking matlab testcase string_simple
+partialchecking matlab testcase struct_rename
+
+struct_rename passed
+partialchecking matlab testcase struct_initialization
+partialchecking matlab testcase typedef_struct
+partialchecking matlab testcase typemap_subst
+partialchecking matlab testcase union_parameter
+partialchecking matlab testcase unions
+
+unions passed
+partialchecking matlab testcase clientdata_prop
+partialchecking matlab testcase imports
+
+imports passed
+partialchecking matlab testcase import_stl
+partialchecking matlab testcase packageoption
+partialchecking matlab testcase mod
+
+mod passed
+partialchecking matlab testcase template_typedef_import
+
+template_typedef_import passed
+partialchecking matlab testcase multi_import
+
+multi_import passed
+make[3]: Target 'check' not remade because of errors.
+../common.mk:698: recipe for target 'partialcheck' failed
+make[2]: *** [partialcheck] Error 2
+Makefile:294: recipe for target 'check-matlab-test-suite' failed
+make[1]: *** [check-matlab-test-suite] Error 1
+Makefile:316: recipe for target 'partialcheck-matlab-test-suite' failed
+make: *** [partialcheck-matlab-test-suite] Error 2

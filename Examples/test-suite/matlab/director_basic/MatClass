@@ -1,0 +1,15 @@
+
+function self=OctClass()
+  global director_basic;
+  self=subclass(director_basic.MyClass());
+  self.method=@OctClass_method;
+  self.vmethod=@OctClass_vmethod;
+end
+function OctClass_method(self,vptr)
+  self.cmethod = 7;
+end
+function out=OctClass_vmethod(self,b)
+  b.x = b.x + 31;
+  out=b;
+end
+
