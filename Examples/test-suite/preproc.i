@@ -294,6 +294,12 @@ inline const char* mangle_macro ## #@__VA_ARGS__ () {
 #define __GMP_HAVE_TOKEN_PASTE 0
 #endif
 
+/* MATLAB/Octave not (always) case sensitive */
+#ifdef SWIGMATLAB
+%rename(ONE_) ONE;
+%rename(TWO_) TWO;
+%rename(THREE_) THREE;
+#endif
 
 /* empty TWO() macro is broken */
 #define ONE 1
@@ -315,6 +321,9 @@ inline const char* mangle_macro ## #@__VA_ARGS__ () {
 %rename(ddefined) defined;
 #endif
 #ifdef SWIGPHP
+%rename(endif_) endif;
+#endif
+#ifdef SWIGMATLAB
 %rename(endif_) endif;
 #endif
 %inline %{
