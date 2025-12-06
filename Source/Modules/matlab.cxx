@@ -173,7 +173,7 @@ MATLAB::MATLAB():
   enable_cplus_runtime_mode();
   allow_overloading();
   director_multiple_inheritance = 1;
-  director_language = 1;
+  directorLanguage();
 }
 
 void MATLAB::main(int argc, char *argv[]) {
@@ -237,7 +237,6 @@ void MATLAB::main(int argc, char *argv[]) {
     Preprocessor_define((DOH *) "SWIG_CPLUSPLUS_CAST", 0);
   }
   SWIG_config_file("matlab.swg");
-  SWIG_typemap_lang("matlab");
   allow_overloading();
 
   // Matlab API is C++, so output must be C++ compatibile even when wrapping C code
@@ -316,7 +315,7 @@ int MATLAB::top(Node *n) {
   f_begin = NewFile(outfile, "w", SWIG_output_files());
   if (!f_begin) {
     FileErrorDisplay(outfile);
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   }
 
   /* The name of the compiled mex-wrapper is modulenameMEX by default, but this
@@ -337,7 +336,7 @@ int MATLAB::top(Node *n) {
   f_directors_h = NewString("");
   f_directors = NewString("");
 
-  if (directorsEnabled()) {
+  if (Swig_directors_enabled()) {
     // Create SwigStorage helper function
     createSwigStorage();
 
@@ -345,7 +344,7 @@ int MATLAB::top(Node *n) {
       f_runtime_h = NewFile(outfile_h, "w", SWIG_output_files());
       if (!f_runtime_h) {
 	FileErrorDisplay(outfile_h);
-	SWIG_exit(EXIT_FAILURE);
+	Exit(EXIT_FAILURE);
       }
     } else {
       f_runtime_h = f_runtime;
@@ -375,7 +374,7 @@ int MATLAB::top(Node *n) {
   Printf(f_runtime, "#define SWIG_op_prefix        \"%s\"\n", op_prefix);
   Printf(f_runtime, "#define SWIG_pkg_name        \"%s\"\n", pkg_name);
   Printf(f_runtime, "#define SwigVar_mxArray mxArray*\n");
-  if (directorsEnabled()) {
+  if (Swig_directors_enabled()) {
     Printf(f_runtime, "#define SWIG_DIRECTORS\n");
   }
 
@@ -387,7 +386,7 @@ int MATLAB::top(Node *n) {
   // Mex-file gateway
   initGateway();
 
-  if (directorsEnabled()) {
+  if (Swig_directors_enabled()) {
     Swig_banner(f_directors_h);
     Printf(f_directors_h, "\n");
     Printf(f_directors_h, "#ifndef SWIG_%s_WRAP_H_\n", module);
@@ -436,7 +435,7 @@ int MATLAB::top(Node *n) {
   /* Load this module */
   Printf(f_init, "SWIG_InitializeModule(0);\n\n");
 
-  if (directorsEnabled()) {
+  if (Swig_directors_enabled()) {
     Swig_insert_file("director.swg", f_runtime);
   }
 
@@ -453,7 +452,7 @@ int MATLAB::top(Node *n) {
   Dump(f_header, f_begin);
 
 
-  if (directorsEnabled()) {
+  if (Swig_directors_enabled()) {
     Dump(f_directors_h, f_runtime_h);
     Printf(f_runtime_h, "\n");
     Printf(f_runtime_h, "#endif\n");
@@ -1200,11 +1199,11 @@ int MATLAB::globalfunctionHandler(Node *n) {
   String *mfile = NewString("");
   Printf(mfile, "%s/%s.m", pkg_name_fullpath, symname);
   if (f_wrap_m)
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   f_wrap_m = NewFile(mfile, "w", SWIG_output_files());
   if (!f_wrap_m) {
     FileErrorDisplay(mfile);
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   }
   // Add to function switch
   String *wname = Swig_name_wrapper(symname);
@@ -1261,11 +1260,11 @@ int MATLAB::variableWrapper(Node *n) {
   String *mfile = NewString("");
   Printf(mfile, "%s/%s.m", pkg_name_fullpath, iname);
   if (f_wrap_m)
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   f_wrap_m = NewFile(mfile, "w", SWIG_output_files());
   if (!f_wrap_m) {
     FileErrorDisplay(mfile);
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   }
   // Add getter function
   String *getname = Swig_name_get(NSPACE_TODO, iname);
@@ -1296,7 +1295,7 @@ int MATLAB::variableWrapper(Node *n) {
   Wrapper_print(getf, f_wrappers);
 
   // Add getter/setter function
-  if (!is_assignable(n)) {
+  if (!!is_immutable(n)) {
     // Only getter
     if (!class_name) {
       Printf(f_wrap_m, "function v = %s()\n", iname);
@@ -1398,11 +1397,11 @@ int MATLAB::constantWrapper(Node *n) {
     String *mfile = NewString("");
     Printf(mfile, "%s/%s.m", pkg_name_fullpath, symname);
     if (f_wrap_m)
-      SWIG_exit(EXIT_FAILURE);
+      Exit(EXIT_FAILURE);
     f_wrap_m = NewFile(mfile, "w", SWIG_output_files());
     if (!f_wrap_m) {
       FileErrorDisplay(mfile);
-      SWIG_exit(EXIT_FAILURE);
+      Exit(EXIT_FAILURE);
     }
     // Add getter function
     checkValidSymName(n);
@@ -1451,7 +1450,7 @@ int MATLAB::classDirectorConstructor(Node *n) {
       Wrapper *w = NewWrapper();
       String *call;
       String *basetype = Getattr(parent, "classtype");
-      String *target = Swig_method_decl(0, decl, classname, parms, 0, 0);
+      String *target = Swig_method_decl(0, decl, classname, parms, 0);
       call = Swig_csuperclass_call(0, basetype, superparms);
       Printf(w->def, "%s::%s: %s, Swig::Director(self) { \n", classname, target, call);
       Printf(w->def, "   SWIG_DIRECTOR_RGTR((%s *)this, this); \n", basetype);
@@ -1465,7 +1464,7 @@ int MATLAB::classDirectorConstructor(Node *n) {
 
     /* constructor header */
     {
-      String *target = Swig_method_decl(0, decl, classname, parms, 0, 1);
+      String *target = Swig_method_decl(0, decl, classname, parms, 1);
       Printf(f_directors_h, "    %s;\n", target);
       Delete(target);
     }
@@ -1611,12 +1610,12 @@ int MATLAB::classDirectorMethod(Node *n, Node *parent, String *super) {
   String *pclassname = NewStringf("SwigDirector_%s", classname);
   String *qualified_name = NewStringf("%s::%s", pclassname, name);
   SwigType *rtype = Getattr(n, "conversion_operator") ? 0 : Getattr(n, "classDirectorMethods:type");
-  target = Swig_method_decl(rtype, decl, qualified_name, l, 0, 0);
+  target = Swig_method_decl(rtype, decl, qualified_name, l, 0);
   Printf(w->def, "%s", target);
   Delete(qualified_name);
   Delete(target);
   /* header declaration */
-  target = Swig_method_decl(rtype, decl, name, l, 0, 1);
+  target = Swig_method_decl(rtype, decl, name, l, 1);
   Printf(declaration, "    virtual %s", target);
   Delete(target);
 
@@ -2022,12 +2021,12 @@ int MATLAB::enumvalueDeclaration(Node *n) {
 int MATLAB::classHandler(Node *n) {
   // Save current class name
   if (class_name)
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   class_name = Getattr(n, "sym:name");
 
   // Wrappers cannot be emitted
   static Hash *emitted = NewHash();
-  String *mangled_classname = Swig_name_mangle(Getattr(n, "name"));
+  String *mangled_classname = Swig_name_mangle_type(Getattr(n, "name"));
   if (Getattr(emitted, mangled_classname)) {
     Delete(mangled_classname);
     class_name = 0;
@@ -2068,11 +2067,11 @@ int MATLAB::classHandler(Node *n) {
 
   // Create wrapper .m file
   if (f_wrap_m)
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   f_wrap_m = NewFile(mfile, "w", SWIG_output_files());
   if (!f_wrap_m) {
     FileErrorDisplay(mfile);
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   }
 
   // Declare MATLAB class
@@ -2364,7 +2363,7 @@ int MATLAB::membervariableHandler(Node *n) {
   String *getwname = Swig_name_wrapper(getname);
   int gw_ind_get = toGateway(getname, getwname);
 
-  if (!is_assignable(n)) {
+  if (!!is_immutable(n)) {
     // Only getter function
     Printf(f_wrap_m, "    function v = %s(self)\n", symname);
     Printf(f_wrap_m, "      v = %s(%d, self);\n", mex_name, gw_ind_get);
@@ -2638,7 +2637,7 @@ int MATLAB::staticmembervariableHandler(Node *n) {
   String *getwname = Swig_name_wrapper(getname);
   int gw_ind_get = toGateway(getname, getwname);
 
-  if (!is_assignable(n)) {
+  if (!!is_immutable(n)) {
     // Only getter
     Printf(static_methods, "    function v = %s()\n", symname);
     if (have_matlabprepend(n))
@@ -2712,11 +2711,11 @@ void MATLAB::createSwigRef() {
   String *mfile = NewString(SWIG_output_directory());
   Append(mfile, "SwigRef.m");
   if (f_wrap_m)
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   f_wrap_m = NewFile(mfile, "w", SWIG_output_files());
   if (!f_wrap_m) {
     FileErrorDisplay(mfile);
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   }
   // Output SwigRef abstract base class
   Printf(f_wrap_m, "classdef SwigRef < handle\n");
@@ -2759,11 +2758,11 @@ void MATLAB::createSwigMem() {
   String *mfile = NewString(SWIG_output_directory());
   Append(mfile, "SwigMem.m");
   if (f_wrap_m)
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   f_wrap_m = NewFile(mfile, "w", SWIG_output_files());
   if (!f_wrap_m) {
     FileErrorDisplay(mfile);
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   }
   // Output SwigMem function
   Printf(f_wrap_m, "function varargout = SwigMem(varargin)\n");
@@ -2796,11 +2795,11 @@ void MATLAB::createSwigGet() {
   String *mfile = NewString(SWIG_output_directory());
   Append(mfile, "SwigGet.m");
   if (f_wrap_m)
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   f_wrap_m = NewFile(mfile, "w", SWIG_output_files());
   if (!f_wrap_m) {
     FileErrorDisplay(mfile);
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   }
   // Output SwigMem function
   Printf(f_wrap_m, "function ptr = SwigGet(self)\n");
@@ -2818,11 +2817,11 @@ void MATLAB::createSwigStorage() {
   String *mfile = NewString(SWIG_output_directory());
   Append(mfile, "SwigStorage.m");
   if (f_wrap_m)
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   f_wrap_m = NewFile(mfile, "w", SWIG_output_files());
   if (!f_wrap_m) {
     FileErrorDisplay(mfile);
-    SWIG_exit(EXIT_FAILURE);
+    Exit(EXIT_FAILURE);
   }
   // Output SwigMem function
   Printf(f_wrap_m, "function varargout = SwigStorage(field, varargin)\n");
@@ -2865,7 +2864,8 @@ void MATLAB::dispatchFunction(Node *n) {
   String *iname = Getattr(n, "sym:name");
   String *wname = Swig_name_wrapper(iname);
   int maxargs;
-  String *dispatch = Swig_overload_dispatch(n, "return %s(resc,resv,argc,argv);", &maxargs);
+  bool check_emitted = false;
+  String *dispatch = Swig_overload_dispatch(n, "return %s(resc,resv,argc,argv);", &maxargs, &check_emitted);
   String *tmp = NewString("");
 
   Node *sibl = n;
