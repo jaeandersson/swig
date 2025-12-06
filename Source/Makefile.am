@@ -61,15 +61,8 @@ eswig_SOURCES =	CParse/cscanner.c		\
 		Modules/lang.cxx		\
 		Modules/lua.cxx			\
 		Modules/main.cxx		\
-<<<<<<< HEAD
+		Modules/matlab.cxx      \
 		Modules/nested.cxx		\
-=======
-		Modules/matlab.cxx		\
-		Modules/modula3.cxx		\
-		Modules/module.cxx		\
-		Modules/mzscheme.cxx		\
-		Modules/nested.cxx  \
->>>>>>> ac35e04c4 ([MATLAB] alphabetize matlab in alphabetical lists)
 		Modules/ocaml.cxx		\
 		Modules/octave.cxx		\
 		Modules/overload.cxx		\
