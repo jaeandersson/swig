@@ -436,6 +436,10 @@ extern "C" {
   const char *Swig_to_string_with_location(DOH *object, int count = -1);
   void Swig_print(DOH *object, int count = -1);
   void Swig_print_with_location(DOH *object, int count = -1);
+  void populate_docParmList(Node *n);
+  int format_paramlist(String* f, List* paramlist, String* normal_entry, String* only_entry, String* no_name, String* self, String* separator);
+  String* Swig_symname(Node *n);
+  void Swig_doc_split(String *s, String *brief, String *main);
 }
 
 void Swig_default_allocators(Node *n);
