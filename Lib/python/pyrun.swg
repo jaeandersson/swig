@@ -2055,11 +2055,13 @@ SWIG_Python_MustGetPtr(PyObject *obj, swig_type_info *ty, int SWIGUNUSEDPARM(arg
 
 /* Convert Python arguments to a type description
  *
- * You must call SWIG_Python_str_DelForPy3() on the result after usage
+ * Returns a string that must be freed with Py_XDECREF(*bytes)
+ * where bytes is the PyObject** passed as the second parameter.
 */
 SWIGRUNTIME const char*
-SWIG_Python_ArgsTypeDesc(PyObject* args) {
+SWIG_Python_ArgsTypeDesc(PyObject* args, PyObject** bytes) {
   const char *res_char = 0;
+  *bytes = NULL;
 #if PY_VERSION_HEX < 0x03070000
   PyObject* module = PyImport_AddModule(SWIG_module_name);
 #else
@@ -2078,9 +2080,9 @@ SWIG_Python_ArgsTypeDesc(PyObject* args) {
     PyObject* res = PyObject_CallObject(fun, args);
     if (!res) return res_char;
     PyObject* res_str = PyObject_Repr(res);
-    if (!res) { Py_DECREF(res); return res_char;}
-    res_char = SWIG_Python_str_AsChar(res_str);
-    if (!res_char) { Py_DECREF(res_str); Py_DECREF(res); return res_char;}
+    if (!res_str) { Py_DECREF(res); return res_char;}
+    res_char = SWIG_PyUnicode_AsUTF8AndSize(res_str, NULL, bytes);
+    if (!res_char) { Py_XDECREF(*bytes); *bytes = NULL; Py_DECREF(res_str); Py_DECREF(res); return res_char;}
     Py_DECREF(res_str);
     Py_DECREF(res);
   }
@@ -2089,15 +2091,16 @@ SWIG_Python_ArgsTypeDesc(PyObject* args) {
 
 /* Convert Python arguments to a type description
  *
- * You must call SWIG_Python_str_DelForPy3() on the result after usage
+ * Returns a string that must be freed with Py_XDECREF(*bytes)
+ * where bytes is the PyObject** passed as the second parameter.
 */
 SWIGRUNTIME const char*
-SWIG_Python_ArgsTypeDesc_funpack(int nobjs, PyObject** swig_obj) {
+SWIG_Python_ArgsTypeDesc_funpack(int nobjs, PyObject** swig_obj, PyObject** bytes) {
   PyObject *t = PyTuple_New(nobjs);
   for (int i=0;i<nobjs;++i) {
     PyTuple_SET_ITEM(t, i, swig_obj[i]);
   }
-  const char* res = SWIG_Python_ArgsTypeDesc(t);
+  const char* res = SWIG_Python_ArgsTypeDesc(t, bytes);
   Py_DECREF(t);
   return res;
 }
