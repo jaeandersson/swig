@@ -4048,21 +4048,34 @@ String *Language::Swig_document_function(Node *n) {
     bool multi_fragment = n_fragments>1;
 
     if (multi_fragment) {
-      // Loop over all fragments
-      Iterator k;
-      for (k = First(doc_node); k.key; k = Next(k)) {
-        String* doc = k.key;
+      // Loop over all fragments in dispatch order (not hash order)
+      // Keep track of which docstrings we've already processed
+      Hash *processed_docs = NewHash();
+
+      for (i = 0; i < nfunc; i++) {
+        Node *ni = Getitem(dispatch, i);
+        String* doc = Getattr(ni, "feature:docstring");
+        if (!doc) {
+          doc = NewString("");
+        }
+
+        // Skip if we've already processed this docstring
+        if (Getattr(processed_docs, doc)) {
+          continue;
+        }
+        Setattr(processed_docs, doc, "1");
+
         List* prototypes = Getattr(doc_node, doc);
-        
+
         String* group_lines = NewString("");
-        for (i = 0; i < Len(prototypes); i++) {
-          Node *ni = Getitem(prototypes, i);
-          
+        for (int j = 0; j < Len(prototypes); j++) {
+          Node *nj = Getitem(prototypes, j);
+
           String * group_line = Copy(t_group_line);
-          
+
           String* proto = NewString("");
-          Swig_prototype(ni, proto, "style_group");
-      
+          Swig_prototype(nj, proto, "style_group");
+
           Replaceall(group_line, "$proto", proto);
 
           Printf(group_lines, "%s\n", group_line);
@@ -4074,6 +4087,7 @@ String *Language::Swig_document_function(Node *n) {
         Printf(f, "%s", group);
         Delete(group);
       }
+      Delete(processed_docs);
     }
   }
   
