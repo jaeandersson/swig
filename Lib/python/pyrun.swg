@@ -140,6 +140,8 @@ SWIG_runtime_data_module(void) {
 /* Append a value to the result obj */
 SWIGINTERN PyObject*
 SWIG_Python_AppendOutput(PyObject* result, PyObject* obj, int is_void) {
+#if !defined(SWIG_PYTHON_OUTPUT_TUPLE)
+  (void)is_void; /* unused */
   if (!result) {
     result = obj;
   } else if (result == Py_None && is_void) {
@@ -160,6 +162,30 @@ SWIG_Python_AppendOutput(PyObject* result, PyObject* obj, int is_void) {
     SWIG_Py_DECREF(obj);
   }
   return result;
+#else
+  PyObject*   o2;
+  PyObject*   o3;
+  (void)is_void; /* unused */
+  if (!result) {
+    result = obj;
+  } else if (result == Py_None && is_void) {
+    SWIG_Py_DECREF(result);
+    result = obj;
+  } else {
+    if (!PyTuple_Check(result)) {
+      o2 = result;
+      result = PyTuple_New(1);
+      PyTuple_SET_ITEM(result, 0, o2);
+    }
+    o3 = PyTuple_New(1);
+    PyTuple_SET_ITEM(o3, 0, obj);
+    o2 = result;
+    result = PySequence_Concat(o2, o3);
+    SWIG_Py_DECREF(o2);
+    SWIG_Py_DECREF(o3);
+  }
+  return result;
+#endif
 }
 
 /* Unpack the argument tuple */
