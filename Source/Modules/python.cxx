@@ -2694,12 +2694,13 @@ public:
       
       Printf(f->code, "if (!PyErr_Occurred() || PyErr_ExceptionMatches(PyExc_TypeError)) {\n");
 
-      Printf(f->code, "const char *res_char = SWIG_Python_ArgsTypeDesc(args);\n");
+      Printf(f->code, "PyObject *bytes = NULL;\n");
+      Printf(f->code, "const char *res_char = SWIG_Python_ArgsTypeDesc(args, &bytes);\n");
       Printf(f->code, "std::string error_str = "
      "\"Wrong number or type of arguments for overloaded function '%s'.\\n\""
      "\n\"  Possible prototypes are:\\n\"\n%s"
      "\n\"  You have: \" +  (res_char ? std::string(res_char) : \"\") + \"\\n\";\n", symname, protoTypes);
-      Printf(f->code, "if (res_char) { SWIG_Python_str_DelForPy3(res_char); }\n");
+      Printf(f->code, "Py_XDECREF(bytes);\n");
       Printf(f->code, "SWIG_SetErrorMsg(PyExc_NotImplementedError, error_str.c_str());\n");
 
 	    Printf(f->code, "}\n");
@@ -3313,16 +3314,17 @@ public:
       
       Printf(f->code, "if (!PyErr_Occurred() || PyErr_ExceptionMatches(PyExc_TypeError)) {\n");
       if (num_arguments>=1) {
+        Printf(f->code, "PyObject *bytes = NULL;\n");
         if (funpack && overname) {
-          Printf(f->code, "const char *res_char = SWIG_Python_ArgsTypeDesc_funpack(nobjs, swig_obj);\n");
+          Printf(f->code, "const char *res_char = SWIG_Python_ArgsTypeDesc_funpack(nobjs, swig_obj, &bytes);\n");
         } else {
-          Printf(f->code, "const char *res_char = SWIG_Python_ArgsTypeDesc(args);\n");
+          Printf(f->code, "const char *res_char = SWIG_Python_ArgsTypeDesc(args, &bytes);\n");
         }
         Printf(f->code, "std::string error_str = "
           "\"Wrong number or type of arguments for function '%s'.\\n\""
           "\n\"  Prototype:\\n\"\n%s"
           "\n\"  You have: \" +  (res_char ? std::string(res_char) : \"\") + \"\\n\";\n", iname, protoType);
-        Printf(f->code, "if (res_char) { SWIG_Python_str_DelForPy3(res_char); }\n");
+        Printf(f->code, "Py_XDECREF(bytes);\n");
         Printf(f->code, "SWIG_SetErrorMsg(PyExc_NotImplementedError, error_str.c_str());\n");
       } else {
         Printf(f->code, "SWIG_SetErrorMsg(PyExc_NotImplementedError, \"Received too many arguments for function '%s'.\");\n", iname);
