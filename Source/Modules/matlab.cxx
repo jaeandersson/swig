@@ -1772,6 +1772,7 @@ int MATLAB::classDirectorMethod(Node *n, Node *parent, String *super) {
 	  Printv(wrap_args, "SwigVar_mxArray ", source, ";\n", NIL);
 
 	  Printv(wrap_args, tm, "\n", NIL);
+	  Printf(wrap_args, "if (%s) mexMakeArrayPersistent(%s);\n", source, source);
 	  Printv(arglist, "(mxArray *)", source, NIL);
 	  Putc('O', parse_args);
 	} else {
@@ -1830,15 +1831,17 @@ int MATLAB::classDirectorMethod(Node *n, Node *parent, String *super) {
 	    Printf(wrap_args, "%s = SWIG_DIRECTOR_CAST(%s);\n", director, nonconst);
 	    Printf(wrap_args, "if (!%s) {\n", director);
 	    Printf(wrap_args, "%s = SWIG_InternalNewPointerObj(%s, SWIGTYPE%s, 0);\n", source, nonconst, mangle);
+	    Printf(wrap_args, "if (%s) mexMakeArrayPersistent(%s);\n", source, source);
 	    Append(wrap_args, "} else {\n");
 	    Printf(wrap_args, "%s = %s->swig_get_self();\n", source, director);
-	    Printf(wrap_args, "Py_INCREF((mxArray *)%s);\n", source);
+	    Printf(wrap_args, "if (%s) mexMakeArrayPersistent(%s);\n", source, source);
 	    Append(wrap_args, "}\n");
 	    Delete(director);
 	    Printv(arglist, source, NIL);
 	  } else {
 	    Wrapper_add_localv(w, source, "SwigVar_mxArray", source, "= 0", NIL);
 	    Printf(wrap_args, "%s = SWIG_InternalNewPointerObj(%s, SWIGTYPE%s, 0);\n", source, nonconst, mangle);
+	    Printf(wrap_args, "if (%s) mexMakeArrayPersistent(%s);\n", source, source);
 	    //Printf(wrap_args, "%s = SWIG_NewPointerObj(%s, SWIGTYPE_p_%s, 0);\n",
 	    //       source, nonconst, base);
 	    Printv(arglist, source, NIL);
@@ -1891,8 +1894,10 @@ int MATLAB::classDirectorMethod(Node *n, Node *parent, String *super) {
 	Printf(w->code, "mxArray* error = SWIG_Matlab_CallInterpEx(0, 0, 1, dispatch_in, \"%s\");\n", symname);
       }
     }
-    // todo: destroy
-    // todo: exception handling
+    /* Destroy persistent input arrays after dispatch */
+    for (int i = 0; i < idx; i++) {
+      Printf(w->code, "if (obj%d) mxDestroyArray(obj%d);\n", i, i);
+    }
 
     if (dirprot_mode() && !is_public(n))
       Printf(w->code, "swig_set_inner(\"%s\", false);\n", name);
