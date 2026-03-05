@@ -1,9 +1,20 @@
 /* Last error */
 static int SWIG_lasterror_code = 0;
-static char SWIG_lasterror_msg[1024];
-SWIGRUNTIME void SWIG_Error(int code, const char *msg) {
+static char *SWIG_lasterror_msg = NULL;
+SWIGRUNTIME void SWIG_Error(int code, const char *format, ...) {
   SWIG_lasterror_code = code;
-  snprintf(SWIG_lasterror_msg, sizeof(SWIG_lasterror_msg), "%s", msg);
+  free(SWIG_lasterror_msg);
+  va_list arg;
+  va_start(arg, format);
+  va_list arg_copy;
+  va_copy(arg_copy, arg);
+  int n = vsnprintf(NULL, 0, format, arg_copy);
+  va_end(arg_copy);
+  SWIG_lasterror_msg = (char*)malloc(n + 1);
+  if (SWIG_lasterror_msg) {
+    vsnprintf(SWIG_lasterror_msg, n + 1, format, arg);
+  }
+  va_end(arg);
 }
 
 SWIGRUNTIME void SWIG_Error_Format(int code, const char *format, ...) {
