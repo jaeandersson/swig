@@ -1,11 +1,9 @@
 /* Last error */
 static int SWIG_lasterror_code = 0;
 static char *SWIG_lasterror_msg = NULL;
-SWIGRUNTIME void SWIG_Error(int code, const char *format, ...) {
+static void SWIG_Error_va(int code, const char *format, va_list arg) {
   SWIG_lasterror_code = code;
   free(SWIG_lasterror_msg);
-  va_list arg;
-  va_start(arg, format);
   va_list arg_copy;
   va_copy(arg_copy, arg);
   int n = vsnprintf(NULL, 0, format, arg_copy);
@@ -14,14 +12,18 @@ SWIGRUNTIME void SWIG_Error(int code, const char *format, ...) {
   if (SWIG_lasterror_msg) {
     vsnprintf(SWIG_lasterror_msg, n + 1, format, arg);
   }
-  va_end(arg);
+}
+
+SWIGRUNTIME void SWIG_Error(int code, const char *msg) {
+  SWIG_lasterror_code = code;
+  free(SWIG_lasterror_msg);
+  SWIG_lasterror_msg = msg ? strdup(msg) : NULL;
 }
 
 SWIGRUNTIME void SWIG_Error_Format(int code, const char *format, ...) {
-  SWIG_lasterror_code = code;
   va_list arg;
   va_start(arg, format);
-  vsnprintf(SWIG_lasterror_msg, sizeof(SWIG_lasterror_msg), format, arg);
+  SWIG_Error_va(code, format, arg);
   va_end(arg);
 }
 
