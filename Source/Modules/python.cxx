@@ -1031,6 +1031,46 @@ public:
             }
             Delete(nm);
           }
+          /* Also pick up `from MOD import N1 as N1, N2 as N2, ...` —
+           * the PEP-484 idiom for re-exporting a name from another module.
+           * Only names with matching `X as X` aliases are considered
+           * re-exports; plain `import X` or unaliased `from M import X`
+           * are not part of the public interface by default. */
+          if (llen > 5 && strncmp(line, "from ", 5) == 0) {
+            const char *imp = 0;
+            for (int k = 5; k < llen - 7; ++k) {
+              if (strncmp(line + k, " import ", 8) == 0) { imp = line + k + 8; break; }
+            }
+            if (imp) {
+              const char *p = imp;
+              const char *line_end = line + llen;
+              while (p < line_end) {
+                while (p < line_end && (*p == ' ' || *p == ',')) p++;
+                const char *n1 = p;
+                while (p < line_end && (isalnum((unsigned char)*p) || *p == '_')) p++;
+                int n1len = p - n1;
+                if (n1len > 0) {
+                  while (p < line_end && *p == ' ') p++;
+                  if (p + 2 < line_end && strncmp(p, "as ", 3) == 0) {
+                    p += 3;
+                    while (p < line_end && *p == ' ') p++;
+                    const char *n2 = p;
+                    while (p < line_end && (isalnum((unsigned char)*p) || *p == '_')) p++;
+                    int n2len = p - n2;
+                    if (n2len == n1len && strncmp(n1, n2, n1len) == 0 && n2[0] != '_') {
+                      String *nm = NewStringWithSize(n2, n2len);
+                      if (!Getattr(seen, nm)) {
+                        Setattr(seen, nm, "1");
+                        Append(names, nm);
+                      }
+                      Delete(nm);
+                    }
+                  }
+                }
+                while (p < line_end && *p != ',') p++;
+              }
+            }
+          }
         }
         pos = end + 1;
       }
@@ -3018,7 +3058,7 @@ public:
     String *rendered = NewString("Any");
     /* Prefer explicit pystub; fall back to tmap:out:doc of the
      * getter if we can find it.  The latter goes through legacy
-     * stubType parsing. */
+     * stubType parsing.  Final fallback: the node's C++ type. */
     String *pystub = Getattr(n, "tmap:out:pystub_out");
     if (!pystub || Len(pystub) == 0) pystub = Getattr(n, "tmap:out:pystub");
     String *doc = Getattr(n, "tmap:out:doc");
@@ -3028,8 +3068,35 @@ public:
     } else if (doc && Len(doc)) {
       Delete(rendered);
       rendered = stubType(doc, true);
+    } else {
+      SwigType *ctype = Getattr(n, "type");
+      if (ctype) {
+        SwigType *resolved = SwigType_typedef_resolve_all(ctype);
+        if (SwigType_isenum(resolved) || Strncmp(resolved, "enum ", 5) == 0) {
+          Delete(rendered);
+          rendered = NewString("int");
+        } else {
+          String *stripped = SwigType_strip_qualifiers(resolved);
+          String *mapped = stubType(stripped, true);
+          if (mapped && Len(mapped) > 0 && Strcmp(mapped, "Any") != 0) {
+            Delete(rendered);
+            rendered = mapped;
+          } else {
+            Delete(mapped);
+          }
+          Delete(stripped);
+        }
+        Delete(resolved);
+      }
     }
-    Printv(f_stubs, indent, symname, ": ", rendered, "\n", NIL);
+    /* Module-level (empty indent): emit `NAME: TYPE = ...` so pyright
+     * doesn't flag re-imports (e.g. `from numpy import *` after
+     * `from casadi import *`) as reassignments of a Final.  Class-body
+     * members keep plain `NAME: TYPE`. */
+    if (Len(indent) == 0)
+      Printv(f_stubs, symname, ": ", rendered, " = ...\n", NIL);
+    else
+      Printv(f_stubs, indent, symname, ": ", rendered, "\n", NIL);
     Delete(rendered);
     f_stubs_class_members++;
   }
@@ -4224,6 +4291,8 @@ public:
     Delete(setname);
     DelWrapper(setf);
     DelWrapper(getf);
+
+    if (stubs && !in_class) stubEmitVariable(n, empty_string);
     return SWIG_OK;
   }
 
@@ -4346,6 +4415,8 @@ public:
 	  Printv(f_s, docstring(n, AUTODOC_CONST, tab4), "\n", NIL);
       }
     }
+
+    if (stubs && !in_class) stubEmitVariable(n, empty_string);
     return SWIG_OK;
   }
 

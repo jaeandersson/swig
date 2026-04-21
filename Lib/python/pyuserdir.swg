@@ -141,10 +141,14 @@ def NAME(ARGS) -> RET: ...
 %}
 %enddef
 
-/* Module-level constant / variable annotation, `NAME: TYPE` at
- * column 0 (not class body). */
+/* Module-level constant / variable annotation, `NAME: TYPE = ...` at
+ * column 0 (not class body).  The `= ...` ellipsis is the stub-file
+ * placeholder and avoids pyright treating a bare module-level
+ * annotation as a Final declaration (which blocks the common
+ * `from X import *; from numpy import *` overlay pattern on names
+ * like `inf`, `pi`). */
 %define %stub_const(NAME, TYPE...)
-%stubcode %{NAME: TYPE
+%stubcode %{NAME: TYPE = ...
 %}
 %enddef
 
