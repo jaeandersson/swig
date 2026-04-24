@@ -970,7 +970,12 @@ public:
              "# Do not modify by hand.\n"
              "from __future__ import annotations\n"
              "from collections.abc import Iterator, Mapping, Sequence\n"
-             "from typing import Any, Generic, Self, TypeVar, overload\n", NIL);
+             "from typing import Any, Generic, TypeVar, overload\n"
+             "# `Self` landed in `typing` in Py3.11 (PEP 673); pulling from\n"
+             "# typing_extensions keeps stub resolution working on Py3.10 and\n"
+             "# older targets (pyright knows typing_extensions via bundled\n"
+             "# typeshed regardless of runtime availability).\n"
+             "from typing_extensions import Self\n", NIL);
       String *user_preamble = (String *)Getattr(n, "python:f_stubs_preamble");
       if (user_preamble && Len(user_preamble) > 0)
         Printv(f_stubs_py, user_preamble, NIL);

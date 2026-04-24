@@ -92,6 +92,11 @@ protected:
 
   bool have_constructor;
   bool have_destructor;
+  // Whether the class currently being processed is abstract in the MATLAB
+  // sense (no swigPtr of its own; acts as a methods-only mixin). Abstract
+  // classes inherit from handle, not SwigRef, and emit no delete/swig_this.
+  // Driven by %feature("abstract") or a true `abstracts` attribute.
+  bool is_abstract_class;
   //String *constructor_name;
   int num_gateway;
   int num_constant;
@@ -163,6 +168,7 @@ MATLAB::MATLAB():
   wrap_class_m(0),
   have_constructor(false),
   have_destructor(false),
+  is_abstract_class(false),
   num_gateway(0),
   director_method_index(0),
   op_prefix(0),
@@ -2107,6 +2113,19 @@ int MATLAB::classHandler(Node *n) {
   have_constructor = false;
   have_destructor = false;
 
+  // Is this class "abstract" in the MATLAB sense? Two signals, either is
+  // sufficient:
+  //   - Getattr(n, "abstracts"): set by SWIG core when the C++ class has
+  //     unimplemented pure virtuals.
+  //   - %feature("abstract"): user-facing opt-in, for methods-only mixins
+  //     that are structurally empty in C++ (so SWIG sees no pure virtuals
+  //     but they still should not own a swigPtr).
+  // Keep effect local to this generator: do not promote feature:abstract
+  // into Getattr(n, "abstracts"), as that flips SWIG's protected-constructor
+  // guard and changes behavior beyond the scope of this fix.
+  is_abstract_class = (Getattr(n, "abstracts") != 0)
+                      || GetFlag(n, "feature:abstract");
+
   // Name of wrapper .m file
   String *mfile = NewString("");
   Printf(mfile, "%s/%s.m", pkg_name_fullpath, class_name);
@@ -2132,6 +2151,11 @@ int MATLAB::classHandler(Node *n) {
   // Declare base classes, if any
   List *baselist = Getattr(n, "bases");
   int base_count = 0;
+  // Track whether every explicit (non-ignored) base is abstract. A concrete
+  // leaf whose bases are all abstract would not transitively reach SwigRef,
+  // so we inject "& SwigRef" at the end of the base list — breaking the
+  // swigPtr diamond while still giving the leaf a single path to SwigRef.
+  bool all_bases_abstract = true;
   if (baselist) {
     // Loop over base classes
     for (Iterator b = First(baselist); b.item; b = Next(b)) {
@@ -2154,6 +2178,11 @@ int MATLAB::classHandler(Node *n) {
 	continue;
       base_count++;
 
+      bool base_is_abstract = (Getattr(b.item, "abstracts") != 0)
+                              || GetFlag(b.item, "feature:abstract");
+      if (!base_is_abstract)
+	all_bases_abstract = false;
+
       // Separate multiple base classes with &
       if (base_count > 1)
 	Printf(f_wrap_m, " & ");
@@ -2173,9 +2202,17 @@ int MATLAB::classHandler(Node *n) {
   // Static methods
   static_methods = NewString("");
 
-  // If no bases, top level class
+  // If no bases, top level class. Abstract classes inherit from handle so
+  // they do not carry their own swigPtr; concrete classes inherit from
+  // SwigRef to gain swigPtr, swig_this, and delete.
   if (base_count == 0) {
-    Printf(f_wrap_m, "SwigRef");
+    Printf(f_wrap_m, is_abstract_class ? "handle" : "SwigRef");
+  } else if (!is_abstract_class && all_bases_abstract) {
+    // Concrete leaf whose bases are all abstract (now < handle): append
+    // SwigRef so exactly one path to SwigRef exists. This is the key to
+    // breaking the diamond that triggers Octave's swigPtr conflict error
+    // (Savannah bug #50011, #66930).
+    Printf(f_wrap_m, " & SwigRef");
   }
 
   // End of class def
@@ -2187,8 +2224,12 @@ int MATLAB::classHandler(Node *n) {
   // Declare class methods
   Printf(f_wrap_m, "  methods\n");
 
-  // swig_this (not needed if defined in base class)
-  if (base_count != 1) { // If >1 bases, need to define to avoid ambiguity
+  // swig_this (not needed if defined in base class).
+  // Abstract classes never carry their own swigPtr, so they cannot
+  // meaningfully answer swig_this anyway. Any method body that calls
+  // self.swig_this() dispatches on the runtime (concrete) class, which
+  // does define it via its < SwigRef path.
+  if (!is_abstract_class && base_count != 1) { // If >1 bases, need to define to avoid ambiguity
     Printf(f_wrap_m, "    function this = swig_this(self)\n");
     Printf(f_wrap_m, "      this = %s(3, self);\n", mex_name); // swigThis has index 3
     Printf(f_wrap_m, "    end\n");
@@ -2234,6 +2275,7 @@ int MATLAB::classHandler(Node *n) {
   set_field = 0;
   Delete(static_methods);
   static_methods = 0;
+  is_abstract_class = false;
   return SWIG_OK;
 }
 
@@ -2563,6 +2605,20 @@ int MATLAB::constructorHandler(Node *n) {
 
 int MATLAB::destructorHandler(Node *n) {
   have_destructor = true;
+  // Abstract classes don't own a swigPtr, so there is nothing to delete.
+  // Emitting per-class delete overrides in a MATLAB hierarchy causes the
+  // runtime to walk up and call each one (see the SwigClear trick below);
+  // omitting them entirely leaves only handle.delete and the concrete
+  // leaf's delete in play — which is what C++ semantics already expect.
+  //
+  // Short-circuit the whole handler: no .m-side delete, no gateway entry,
+  // and no generated C destroy wrapper. Leaving Language::destructorHandler
+  // out avoids emitting an orphaned wrapper function that nothing can ever
+  // call (gateway index never assigned). have_destructor stays true so the
+  // rest of classHandler treats the type as "destructor seen".
+  if (is_abstract_class) {
+    return SWIG_OK;
+  }
   if (nodelete) {
     Printf(f_wrap_m, "    function do_delete(self)\n");
   } else {
@@ -2799,7 +2855,12 @@ void MATLAB::createSwigRef() {
   Printf(f_wrap_m, "  properties(Hidden = true, Access = public) \n");
   Printf(f_wrap_m, "    swigPtr\n");
   Printf(f_wrap_m, "  end\n");
-  Printf(f_wrap_m, "  methods(Static = true, Access = protected)\n");
+  // Access must be public: abstract mixin classes (%feature("abstract"))
+  // no longer inherit from SwigRef, but their generated constructors still
+  // need to call SwigRef.Null to initialise downstream bases with a null
+  // sentinel (via `self@pkg.Base(SwigRef.Null)`). A protected Access would
+  // fail meta.class lookup from a class that isn't in SwigRef's hierarchy.
+  Printf(f_wrap_m, "  methods(Static = true, Access = public)\n");
   Printf(f_wrap_m, "    function obj = Null()\n");
   Printf(f_wrap_m, "      persistent obj_null\n");
   Printf(f_wrap_m, "      if isempty(obj_null)\n");
