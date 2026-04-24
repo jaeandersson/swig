@@ -2502,6 +2502,20 @@ void MATLAB::wrapConstructor(int gw_ind, String *symname, String *fullname, Node
   Printf(f_wrap_m, "    function self = %s(varargin)\n", symname);
   autodoc_to_m(f_wrap_m, n);
   Printf(f_wrap_m, "%s", base_init);
+  // Octave 10+ identity-cast workaround. When the user writes `Foo(foo)`
+  // with `foo` an instance of Foo, Octave 10+ dispatches it as the method
+  // call `foo.Foo()` — `foo` binds to `self` (swigPtr already set) and
+  // `nargin` becomes 0. Without this guard, the else-branch below would
+  // then call the no-arg MEX constructor and clobber the pointer with a
+  // freshly-made empty instance. Detect the case and short-circuit as
+  // identity: leave self untouched. Safe on MATLAB and pre-10 Octave
+  // (nargin is never 0 in the real no-arg call because self.swigPtr is
+  // still []). Skipped in abstract classes since they don't own swigPtr.
+  if (!is_abstract_class) {
+    Printf(f_wrap_m, "      if nargin == 0 && ~isempty(self.swigPtr)\n");
+    Printf(f_wrap_m, "        return\n");
+    Printf(f_wrap_m, "      end\n");
+  }
   Printf(f_wrap_m, "      if nargin==1 && strcmp(class(varargin{1}),'SwigRef')\n");
   Printf(f_wrap_m, "        if ~isnull(varargin{1})\n");
   Printf(f_wrap_m, "          self.swigPtr = varargin{1}.swigPtr;\n");
@@ -2528,6 +2542,12 @@ void MATLAB::wrapConstructorDirector(int gw_ind, String *symname, String *fullna
   Printf(f_wrap_m, "    function self = %s(varargin)\n", symname);
   Printf(f_wrap_m, "%s", base_init);
   autodoc_to_m(f_wrap_m, n);
+  // Octave 10+ identity-cast workaround (see wrapConstructor).
+  if (!is_abstract_class) {
+    Printf(f_wrap_m, "      if nargin == 0 && ~isempty(self.swigPtr)\n");
+    Printf(f_wrap_m, "        return\n");
+    Printf(f_wrap_m, "      end\n");
+  }
   Printf(f_wrap_m, "      if nargin==1 && strcmp(class(varargin{1}),'SwigRef')\n");
   Printf(f_wrap_m, "        if ~isnull(varargin{1})\n");
   Printf(f_wrap_m, "          self.swigPtr = varargin{1}.swigPtr;\n");
