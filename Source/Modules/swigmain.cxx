@@ -45,6 +45,8 @@ extern "C" {
   Language *swig_scilab(void);
   Language *swig_tcl(void);
   Language *swig_xml(void);
+  Language *swig_embind(void);
+  Language *swig_webasm_js(void);
 }
 
 /* Association of command line options to language modules.
@@ -58,6 +60,8 @@ static TargetLanguageModule modules[] = {
   {"-clisp", NULL, "CLISP", Disabled},
   {"-csharp", swig_csharp, "C#", Supported},
   {"-d", swig_d, "D", Supported},
+  {"-embind", swig_embind, "Emscripten Embind C++ bindings", Experimental},
+  {"-webasm-js", swig_webasm_js, "Raw WebAssembly + JavaScript wrapper (no Embind)", Experimental},
   {"-go", swig_go, "Go", Supported},
   {"-guile", swig_guile, "Guile", Supported},
   {"-java", swig_java, "Java", Supported},

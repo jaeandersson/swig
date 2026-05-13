@@ -77,6 +77,8 @@ eswig_SOURCES =	CParse/cscanner.c		\
 		Modules/typepass.cxx		\
 		Modules/utils.cxx		\
 		Modules/xml.cxx			\
+		Modules/embind.cxx		\
+		Modules/webasm_js.cxx		\
 		Preprocessor/cpp.c		\
 		Preprocessor/expr.c		\
 		Swig/cwrap.c			\
