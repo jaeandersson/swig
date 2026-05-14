@@ -49,6 +49,9 @@ public:
       global_names_seen(0), global_overload_counts(0),
       cpp_to_js_class(0),
       cpp_to_js_vector_class(0),
+      is_vector_jsname(0),
+      js_to_cpp_canonical(0),
+      classes_needing_probes(0),
       global_overloads(0),
       class_has_base(false) {}
 
@@ -79,12 +82,23 @@ public:
       if (jsname && t) {
         String *cn = SwigType_str(t, 0);
         Setattr(cpp_to_js_class, cn, jsname);
+        /* Reverse map: JS class name -> canonical cpp form.  Used at
+           end-of-top() to emit swig_can_<Class> probe wrappers. */
+        if (!js_to_cpp_canonical) js_to_cpp_canonical = NewHash();
+        if (!Getattr(js_to_cpp_canonical, jsname)) {
+          Setattr(js_to_cpp_canonical, jsname, Copy(cn));
+        }
         /* Track std::vector<...> instantiations separately so call-site
            codegen can auto-convert JS arrays <-> XVector at the boundary. */
         bool is_vector = (Len(cn) > 12 && strncmp(Char(cn), "std::vector<", 12) == 0);
         if (is_vector) {
           if (!cpp_to_js_vector_class) cpp_to_js_vector_class = NewHash();
           Setattr(cpp_to_js_vector_class, cn, jsname);
+          /* Sibling table keyed by JS class name: O(1) "is this JS class a
+             vector wrapper?" check at dispatcher emit time, replacing a
+             linear scan over cpp_to_js_vector_class values. */
+          if (!is_vector_jsname) is_vector_jsname = NewHash();
+          Setattr(is_vector_jsname, jsname, "1");
         }
         if (Len(cn) > 8 && strncmp(Char(cn), "casadi::", 8) == 0) {
           String *bare = NewString(Char(cn) + 8);
@@ -113,45 +127,26 @@ public:
   }
 
   /* If `rt` is a registered std::vector<...> instantiation, return the
-     JS vector class name (e.g. "MXVector"); else 0.  Resolves typedef
-     aliases inside template args. */
+     JS vector class name (e.g. "MXVector"); else 0.  Uses the canonical
+     trim-and-lookup helper against the cpp_to_js_vector_class table. */
   String *vector_class_name(SwigType *rt) {
     if (!rt || !cpp_to_js_vector_class) return 0;
+    /* Variant 1: direct print. */
     String *cn = SwigType_str(rt, 0);
-    const char *cs = Char(cn);
-    int n = Len(cn);
-    while (n > 0 && (cs[0] == ' ' || cs[0] == '\t')) { cs++; n--; }
-    while (n > 0 && (cs[n-1] == ' ' || cs[n-1] == '\t')) n--;
-    if (n > 6 && strncmp(cs, "const ", 6) == 0) { cs += 6; n -= 6; }
-    for (;;) {
-      while (n > 0 && (cs[n-1] == '&' || cs[n-1] == '*' ||
-                       cs[n-1] == ' ' || cs[n-1] == '\t')) n--;
-      if (n > 6 && strncmp(cs + n - 6, " const", 6) == 0) { n -= 6; continue; }
-      break;
-    }
-    String *bare = NewStringWithSize(cs, n);
+    String *bare = trim_cpp_qualifiers(cn);
     String *hit = (String *)Getattr(cpp_to_js_vector_class, bare);
-    if (!hit) {
-      SwigType *t = Copy(rt);
-      SwigType *resolved = SwigType_typedef_resolve_all(t);
-      if (resolved) {
-        String *rstr = SwigType_str(resolved, 0);
-        const char *rs = Char(rstr);
-        int rn = Len(rstr);
-        if (rn > 6 && strncmp(rs, "const ", 6) == 0) { rs += 6; rn -= 6; }
-        for (;;) {
-          while (rn > 0 && (rs[rn-1] == '&' || rs[rn-1] == '*' ||
-                            rs[rn-1] == ' ' || rs[rn-1] == '\t')) rn--;
-          if (rn > 6 && strncmp(rs + rn - 6, " const", 6) == 0) { rn -= 6; continue; }
-          break;
-        }
-        String *rbare = NewStringWithSize(rs, rn);
-        hit = (String *)Getattr(cpp_to_js_vector_class, rbare);
-        Delete(rbare); Delete(rstr); Delete(resolved);
-      }
-      Delete(t);
+    Delete(bare); Delete(cn);
+    if (hit) return Len(hit) > 0 ? hit : 0;
+    /* Variant 2: typedef-resolved. */
+    SwigType *t = Copy(rt);
+    SwigType *resolved = SwigType_typedef_resolve_all(t);
+    if (resolved) {
+      String *rstr  = SwigType_str(resolved, 0);
+      String *rbare = trim_cpp_qualifiers(rstr);
+      hit = (String *)Getattr(cpp_to_js_vector_class, rbare);
+      Delete(rbare); Delete(rstr); Delete(resolved);
     }
-    Delete(cn); Delete(bare);
+    Delete(t);
     return hit && Len(hit) > 0 ? hit : 0;
   }
 
@@ -213,6 +208,24 @@ protected:
                                        JS arrays <-> XVector at the boundary
                                        so users see plain arrays, not the
                                        internal vector classes. */
+  Hash   *is_vector_jsname;        /* Inverted: JS class name -> "1" if it
+                                       was registered as a vector wrapper.
+                                       O(1) check at dispatcher-emit time
+                                       vs the linear scan over
+                                       cpp_to_js_vector_class values. */
+  Hash   *js_to_cpp_canonical;     /* JS class name -> canonical fully-
+                                       qualified C++ type string (e.g.
+                                       "MX" -> "casadi::MX").  Populated
+                                       at registration time; used at
+                                       end-of-top() to emit
+                                       `swig_can_<Class>` probe wrappers
+                                       that delegate to
+                                       casadi::can_convert<cpp_type>(p). */
+  Hash   *classes_needing_probes;  /* JS class names referenced from any
+                                       dispatcher.  Drives probe-wrapper
+                                       emission at top()-end so we only
+                                       emit probes that are actually
+                                       called. */
   Hash   *global_overloads;        /* jsname -> List<Hash{arg0_jsclass, body,
                                        arity}>.  Built in globalfunctionHandler,
                                        drained in top() to emit a dispatcher per
@@ -233,6 +246,45 @@ protected:
 
   void register_export(const char *swig_name) {
     Printf(f_out_exports, "_%s\n", swig_name);
+  }
+
+  /* Mark a JS class as needing a `swig_can_<Class>` probe wrapper.
+     Called from dispatcher-emit sites; the actual wrapper is emitted at
+     end-of-top() in emit_probe_wrappers(). */
+  void register_probe(const String *jsname) {
+    if (!classes_needing_probes) classes_needing_probes = NewHash();
+    Setattr(classes_needing_probes, jsname, "1");
+  }
+
+  /* Emit one `EMSCRIPTEN_KEEPALIVE int swig_can_<Class>(EM_VAL p)`
+     wrapper per registered probe.  Each delegates to
+     `casadi::can_convert<cpp_type>(p)` which calls `to_ptr(p, T**=0)`
+     (no actual conversion).  The dispatcher uses these in place of the
+     JS-side `__can(arg, "<Class>")` string-compare predicate, so dispatch
+     goes through the same fuzzy-coercion path as matlab/python. */
+  void emit_probe_wrappers() {
+    if (!classes_needing_probes || !js_to_cpp_canonical) return;
+    Printf(f_cpp_wrappers, "\n/* --- Probe wrappers (Phase 3.1): "
+                           "wasm-side can_convert<T> dispatch helpers --- */\n");
+    Iterator it = First(classes_needing_probes);
+    while (it.key) {
+      String *jsname = (String *)it.key;
+      String *cpp_t  = (String *)Getattr(js_to_cpp_canonical, jsname);
+      if (cpp_t && Len(cpp_t) > 0) {
+        String *swig_name = NewStringf("swig_can_%s", jsname);
+        /* Stash the type expression in a typedef-aliased local to avoid
+           template-comma tokenization issues at the macro level. */
+        Printf(f_cpp_wrappers,
+          "EMSCRIPTEN_KEEPALIVE int %s(EM_VAL p) {\n"
+          "  typedef %s _T;\n"
+          "  return casadi::can_convert<_T>(p) ? 1 : 0;\n"
+          "}\n",
+          swig_name, cpp_t);
+        register_export(Char(swig_name));
+        Delete(swig_name);
+      }
+      it = Next(it);
+    }
   }
 
   /* Typemap lookups follow SWIG's standard names (ctype/in/out/freearg)
@@ -521,10 +573,10 @@ protected:
 
     String *raw_call;
     if (self_prefix && self_prefix[0]) {
-      raw_call = NewStringf("M._%s(%s%s%s)", swig_name, self_prefix,
+      raw_call = NewStringf("__chk(M._%s(%s%s%s))", swig_name, self_prefix,
                             Len(call_args) > 0 ? ", " : "", call_args);
     } else {
-      raw_call = NewStringf("M._%s(%s)", swig_name, call_args);
+      raw_call = NewStringf("__chk(M._%s(%s))", swig_name, call_args);
     }
     SwigType *eff_rt = effective_js_return_type(rt, p);
     String *marshalled = js_marshal_return(eff_rt ? eff_rt : rt, Char(raw_call));
@@ -565,11 +617,11 @@ protected:
      Used to auto-unwrap proxy instances at call sites: a parm of type
      `const casadi::MX&` becomes `a0._ptr` in the JS dispatch.  Mirrors
      the resolution logic in js_marshal_return. */
-  bool is_registered_class_type(SwigType *rt) {
-    if (!rt || !cpp_to_js_class) return false;
-    String *cname = SwigType_str(rt, 0);
-    const char *cs = Char(cname);
-    int cn = Len(cname);
+  /* Strip C++ qualifiers (`const`, `&`, `*`, whitespace) from a printed
+     SwigType_str.  Returned String is a fresh allocation (caller deletes). */
+  String *trim_cpp_qualifiers(const String *full) {
+    const char *cs = Char(full);
+    int cn = Len(full);
     while (cn > 0 && (cs[0] == ' ' || cs[0] == '\t')) { cs++; cn--; }
     while (cn > 0 && (cs[cn-1] == ' ' || cs[cn-1] == '\t')) cn--;
     if (cn > 6 && strncmp(cs, "const ", 6) == 0) { cs += 6; cn -= 6; }
@@ -579,41 +631,74 @@ protected:
       if (cn > 6 && strncmp(cs + cn - 6, " const", 6) == 0) { cn -= 6; continue; }
       break;
     }
-    String *bare = NewStringWithSize(cs, cn);
+    return NewStringWithSize(cs, cn);
+  }
+
+  /* Look up `bare` (and its last-`::` suffix) in cpp_to_js_class.
+     Returns the registered JS class name (owned by cpp_to_js_class; do
+     NOT delete) or NULL. */
+  String *lookup_bare(String *bare) {
+    if (!cpp_to_js_class || !bare || Len(bare) == 0) return NULL;
     String *hit = (String *)Getattr(cpp_to_js_class, bare);
-    if (!hit && cn > 8 && strncmp(cs, "casadi::", 8) == 0) {
-      String *stripped = NewStringWithSize(cs + 8, cn - 8);
+    if (hit) return hit;
+    /* Generic last-`::` strip (replaces former "casadi::"-only hardcoded
+       check).  Allows lookup of `ns::Sub::Foo` to fall back to `Foo`. */
+    const char *cs = Char(bare);
+    int cn = Len(bare);
+    const char *last = NULL;
+    for (int i = 0; i + 1 < cn; ++i) {
+      if (cs[i] == ':' && cs[i+1] == ':') last = cs + i + 2;
+    }
+    if (last && last > cs) {
+      int suff_len = cn - (last - cs);
+      String *stripped = NewStringWithSize(last, suff_len);
       hit = (String *)Getattr(cpp_to_js_class, stripped);
       Delete(stripped);
     }
-    if (!hit) {
-      SwigType *t = Copy(rt);
-      SwigType *resolved = SwigType_typedef_resolve_all(t);
-      if (resolved) {
-        String *rstr = SwigType_str(resolved, 0);
-        const char *rs = Char(rstr);
-        int rn = Len(rstr);
-        while (rn > 0 && (rs[0] == ' ' || rs[0] == '\t')) { rs++; rn--; }
-        while (rn > 0 && (rs[rn-1] == ' ' || rs[rn-1] == '\t')) rn--;
-        if (rn > 6 && strncmp(rs, "const ", 6) == 0) { rs += 6; rn -= 6; }
-        for (;;) {
-          while (rn > 0 && (rs[rn-1] == '&' || rs[rn-1] == '*' ||
-                            rs[rn-1] == ' ' || rs[rn-1] == '\t')) rn--;
-          if (rn > 6 && strncmp(rs + rn - 6, " const", 6) == 0) { rn -= 6; continue; }
-          break;
-        }
-        String *rbare = NewStringWithSize(rs, rn);
-        hit = (String*)Getattr(cpp_to_js_class, rbare);
-        if (!hit && rn > 8 && strncmp(rs, "casadi::", 8) == 0) {
-          String *stripped = NewStringWithSize(rs + 8, rn - 8);
-          hit = (String*)Getattr(cpp_to_js_class, stripped);
-          Delete(stripped);
-        }
-        Delete(rbare); Delete(rstr); Delete(resolved);
-      }
-      Delete(t);
+    return hit;
+  }
+
+  /* The canonical class-name lookup.  Tries (in order):
+       1. printed SwigType_str trimmed of cv/&/*
+       2. typedef-resolved form of same
+       3. SwigType_namestr (no spaces around <>)
+     Each variant is also retried with the leading namespace stripped
+     (last-`::` suffix).  Returns the registered JS class name (owned by
+     cpp_to_js_class; do NOT delete) or NULL.  This replaces 5+
+     duplicate copies of the same trim-and-lookup pattern. */
+  String *lookup_js_class(SwigType *rt) {
+    if (!rt || !cpp_to_js_class) return NULL;
+    /* Variant 1: direct print. */
+    String *cname = SwigType_str(rt, 0);
+    String *bare  = trim_cpp_qualifiers(cname);
+    String *hit   = lookup_bare(bare);
+    Delete(bare); Delete(cname);
+    if (hit) return hit;
+    /* Variant 2: typedef-resolved. */
+    SwigType *t = Copy(rt);
+    SwigType *resolved = SwigType_typedef_resolve_all(t);
+    if (resolved) {
+      String *rstr  = SwigType_str(resolved, 0);
+      String *rbare = trim_cpp_qualifiers(rstr);
+      hit = lookup_bare(rbare);
+      Delete(rbare); Delete(rstr); Delete(resolved);
     }
-    Delete(cname); Delete(bare);
+    Delete(t);
+    if (hit) return hit;
+    /* Variant 3: namestr form. */
+    SwigType *t2 = Copy(rt);
+    String *namestr = SwigType_namestr(t2);
+    if (namestr) {
+      String *nbare = trim_cpp_qualifiers(namestr);
+      hit = lookup_bare(nbare);
+      Delete(nbare); Delete(namestr);
+    }
+    Delete(t2);
+    return hit;
+  }
+
+  bool is_registered_class_type(SwigType *rt) {
+    String *hit = lookup_js_class(rt);
     return hit && Len(hit) > 0;
   }
 
@@ -634,99 +719,23 @@ protected:
       r = Copy(tm);
       Replaceall(r, "$call", expr);
     } else {
-      /* Resolve to a bare class name: strip `const`, `&`, `*`.  Then
-         look up in cpp_to_js_class.  If found, wrap; else identity. */
-      String *cname = SwigType_str(rt, 0);
-      const char *cs = Char(cname);
-      int cn = Len(cname);
-      while (cn > 0 && (cs[0] == ' ' || cs[0] == '\t')) { cs++; cn--; }
-      while (cn > 0 && (cs[cn-1] == ' ' || cs[cn-1] == '\t')) cn--;
-      if (cn > 6 && strncmp(cs, "const ", 6) == 0) { cs += 6; cn -= 6; }
-      for (;;) {
-        while (cn > 0 && (cs[cn-1] == '&' || cs[cn-1] == '*' ||
-                          cs[cn-1] == ' ' || cs[cn-1] == '\t')) cn--;
-        if (cn > 6 && strncmp(cs + cn - 6, " const", 6) == 0) { cn -= 6; continue; }
-        break;
-      }
-      String *bare = NewStringWithSize(cs, cn);
-      String *jsname = cpp_to_js_class ? (String*)Getattr(cpp_to_js_class, bare) : 0;
-      /* Try typedef-resolved form: turns std::vector< casadi::DM > into
-         std::vector< casadi::Matrix<double> >, which is what
-         prepopulate_class_names registered. */
-      if (!jsname && cpp_to_js_class) {
-        SwigType *t = Copy(rt);
-        SwigType *resolved = SwigType_typedef_resolve_all(t);
-        if (resolved) {
-          String *rstr = SwigType_str(resolved, 0);
-          const char *rs = Char(rstr);
-          int rn = Len(rstr);
-          while (rn > 0 && (rs[0] == ' ' || rs[0] == '\t')) { rs++; rn--; }
-          while (rn > 0 && (rs[rn-1] == ' ' || rs[rn-1] == '\t')) rn--;
-          if (rn > 6 && strncmp(rs, "const ", 6) == 0) { rs += 6; rn -= 6; }
-          for (;;) {
-            while (rn > 0 && (rs[rn-1] == '&' || rs[rn-1] == '*' ||
-                              rs[rn-1] == ' ' || rs[rn-1] == '\t')) rn--;
-            if (rn > 6 && strncmp(rs + rn - 6, " const", 6) == 0) { rn -= 6; continue; }
-            break;
-          }
-          String *rbare = NewStringWithSize(rs, rn);
-          jsname = (String*)Getattr(cpp_to_js_class, rbare);
-          if (!jsname && rn > 8 && strncmp(rs, "casadi::", 8) == 0) {
-            String *stripped = NewStringWithSize(rs + 8, rn - 8);
-            jsname = (String*)Getattr(cpp_to_js_class, stripped);
-            Delete(stripped);
-          }
-          Delete(rbare); Delete(rstr); Delete(resolved);
-        }
-        Delete(t);
-      }
-      /* Also try the namestr form (no spaces around <>) -- SWIG sometimes
-         hands us one and the hash holds the other. */
-      if (!jsname) {
-        SwigType *t = Copy(rt);
-        String *namestr = SwigType_namestr(t);
-        if (namestr) {
-          /* Strip qualifiers from namestr the same way. */
-          const char *ns = Char(namestr);
-          int nl = Len(namestr);
-          while (nl > 0 && (ns[0] == ' ' || ns[0] == '\t')) { ns++; nl--; }
-          while (nl > 0 && (ns[nl-1] == ' ' || ns[nl-1] == '\t')) nl--;
-          if (nl > 6 && strncmp(ns, "const ", 6) == 0) { ns += 6; nl -= 6; }
-          for (;;) {
-            while (nl > 0 && (ns[nl-1] == '&' || ns[nl-1] == '*' ||
-                              ns[nl-1] == ' ' || ns[nl-1] == '\t')) nl--;
-            if (nl > 6 && strncmp(ns + nl - 6, " const", 6) == 0) { nl -= 6; continue; }
-            break;
-          }
-          String *nbare = NewStringWithSize(ns, nl);
-          jsname = (String*)Getattr(cpp_to_js_class, nbare);
-          if (!jsname && nl > 8 && strncmp(ns, "casadi::", 8) == 0) {
-            String *stripped = NewStringWithSize(ns + 8, nl - 8);
-            jsname = (String*)Getattr(cpp_to_js_class, stripped);
-            Delete(stripped);
-          }
-          Delete(nbare); Delete(namestr);
-        }
-        Delete(t);
-      }
-      /* And try with leading casadi:: stripped from `bare` too. */
-      if (!jsname && cn > 8 && strncmp(cs, "casadi::", 8) == 0) {
-        String *stripped = NewStringWithSize(cs + 8, cn - 8);
-        jsname = (String*)Getattr(cpp_to_js_class, stripped);
-        Delete(stripped);
-      }
+      /* Resolve to a registered JS class name via the canonical helper
+         (handles cv/&/* stripping, typedef-resolution, namestr form, and
+         last-`::` namespace fallback in one place). */
+      String *jsname = lookup_js_class(rt);
       if (jsname && Len(jsname) > 0) {
         r = NewStringf("new %s(__PRIVATE_CTOR, __from_handle(%s))", Char(jsname), expr);
       } else {
         /* WASM_JS_DEBUG_WRAP=1 logs lookup misses for tuning the
-           pre-pass keyset.  Useful when extending casadi.i with new
+           pre-pass keyset.  Useful when extending the .i file with new
            class types. */
         if (getenv("WASM_JS_DEBUG_WRAP")) {
+          String *cname = SwigType_str(rt, 0);
           Printf(stderr, "[wasm_js wrap miss] %s\n", cname);
+          Delete(cname);
         }
         r = NewString(expr);
       }
-      Delete(cname); Delete(bare);
     }
     Delete(fake);
     return r;
@@ -1184,6 +1193,12 @@ protected:
   String *cpp_call_body(ParmList *p, SwigType *rt, const String *call_expr) {
     String *out = NewString("");
 
+    /* Wrap the entire body in an inner block so any non-trivially-init'd
+       local (std::vector / std::string / casadi::MX temps, the SwigValueWrapper
+       `result`) is OUT of scope at the `fail:` label.  Without this wrap,
+       C++ rejects the goto with "jump bypasses variable initialization". */
+    Printf(out, "  {\n");
+
     /* Locals + in conversions. */
     String *prologue = parm_prologue(p);
     Printv(out, prologue, NIL);
@@ -1207,6 +1222,9 @@ protected:
       String *frees = parm_freeargs(p);
       Printv(out, frees, NIL);
       Delete(frees);
+      Printf(out, "  return;\n");
+      Printf(out, "  }\n");  /* close the body-wrap block */
+      emit_fail_label(out, rt, p);
       return out;
     }
 
@@ -1230,6 +1248,8 @@ protected:
         Printf(out, "  for (int _i = 0; _i < %d; ++_i) _packed[_i] = _argouts[_i];\n", n_argouts);
         Printf(out, "  return (void*)_packed;\n");
       }
+      Printf(out, "  }\n");  /* close the body-wrap block */
+      emit_fail_label(out, rt, p);
       return out;
     }
 
@@ -1331,7 +1351,31 @@ protected:
       Printf(out, "  for (int _i = 0; _i < %d; ++_i) _packed[1+_i] = _argouts[_i];\n", n_argouts);
       Printf(out, "  return (void*)_packed;\n");
     }
+    Printf(out, "  }\n");  /* close the body-wrap block */
+    /* fail: label.  Reached via SWIG_fail / SWIG_exception_fail from
+       any in-typemap that fails conversion.  Returns a zero sentinel
+       (null EM_VAL / NULL pointer / 0 numeric).  JS-side dispatcher
+       checks `_swig_last_error_code()` after the call and throws. */
+    emit_fail_label(out, rt, p);
     return out;
+  }
+
+  /* Append `fail: return <sentinel>;` to the wrapper body.  The sentinel
+     is `;` for void returns and `(ret_t)0;` for everything else (EM_VAL,
+     void*, int, double, const char*, enums — the C-style cast handles
+     them all uniformly).  The label is emitted unconditionally; wrappers
+     with no SWIG_fail-using typemaps will warn "unused label" but compile
+     cleanly. */
+  void emit_fail_label(String *out, SwigType *rt, ParmList *p) {
+    String *ret_t = effective_return_ctype(rt, p);
+    bool is_void = (Cmp(ret_t, "void") == 0);
+    Printf(out, "fail:\n");
+    if (is_void) {
+      Printf(out, "  return;\n");
+    } else {
+      Printf(out, "  return (%s)0;\n", ret_t);
+    }
+    Delete(ret_t);
   }
 };
 
@@ -1428,7 +1472,11 @@ int WASM_JS::top(Node *n) {
   Swig_register_filebyname("init",    f_cpp_init);
   Swig_register_filebyname("begin",   f_cpp_runtime);
 
-  Printf(f_out_exports, "_malloc\n_free\n");
+  /* Always-on runtime exports: malloc/free for JS-side buffer alloc,
+     and the SWIG_fail error-readback pair (defined in wasm_jsrun.swg).
+     The dispatcher / call-site emitters reference the latter to surface
+     C++-side typemap-conversion failures as JS exceptions. */
+  Printf(f_out_exports, "_malloc\n_free\n_swig_last_error_code\n_swig_last_error_msg\n");
 
   /* Shared sentinel that lets derived ctors pass a pre-allocated ptr up to
      their base ctor through super(), avoiding double-allocation. */
@@ -1446,7 +1494,19 @@ int WASM_JS::top(Node *n) {
   Printf(f_js_pre,
     "  const __unwrap      = a => M.__swig_take_handle(a);\n"
     "  const __from_handle = h => M.__swig_release_handle(h)._ptr;\n"
-    "  const __unwrap_args = (...args) => args.map(__unwrap);\n\n");
+    "  const __unwrap_args = (...args) => args.map(__unwrap);\n"
+    "  // Error-readback wrapper.  Every wasm call site is wrapped in\n"
+    "  // __chk() so a typemap conversion failure on the C++ side (which\n"
+    "  // gotos `fail:` and returns the zero sentinel) surfaces as a JS\n"
+    "  // Error instead of silently propagating a bogus value.\n"
+    "  const __chk = (v) => {\n"
+    "    const c = M._swig_last_error_code();\n"
+    "    if (c !== 0) {\n"
+    "      const m = M.UTF8ToString(M._swig_last_error_msg());\n"
+    "      throw new Error(`SWIG error (${c}): ${m || 'conversion failed'}`);\n"
+    "    }\n"
+    "    return v;\n"
+    "  };\n\n");
 
   /* Array <-> vector marshalling.  Users only ever pass / receive plain
      JS arrays; the XVector classes are an internal SWIG implementation
@@ -1553,16 +1613,15 @@ int WASM_JS::top(Node *n) {
           String *jsargs_e = (String *)Getattr(e, "jsargs");
           String *body  = (String *)Getattr(e, "body");
           if (Len(arg0c) > 0) {
-            bool is_vec = false;
+            /* O(1) vector check via is_vector_jsname inverted hash. */
+            bool is_vec = is_vector_jsname && Getattr(is_vector_jsname, arg0c) != 0;
             String *elem_class = 0;
-            if (cpp_to_js_vector_class) {
-              Iterator vit = First(cpp_to_js_vector_class);
-              while (vit.key) {
-                if (Strcmp((String *)vit.item, arg0c) == 0) { is_vec = true; break; }
-                vit = Next(vit);
-              }
-            }
             if (is_vec) {
+              /* Heuristic: vectors registered via %wasm_vec(T, NAME) get a
+                 NAME of the form "<ElemClass>Vector".  Strip the suffix to
+                 recover the element class name.  TODO(plan Phase 4+):
+                 store the element class name explicitly at registration
+                 time so we don't depend on this naming convention. */
               int al = Len(arg0c);
               if (al > 6 && strcmp(Char(arg0c) + al - 6, "Vector") == 0) {
                 elem_class = NewStringWithSize(Char(arg0c), al - 6);
@@ -1600,6 +1659,12 @@ int WASM_JS::top(Node *n) {
       it = Next(it);
     }
   }
+
+  /* Phase 3 deferred: probe-based dispatch needs a `_swig_class` tag on
+     every JS proxy first (so SWIG_WASMJS_ConvertPtr can validate type
+     identity, not just extract `_ptr`).  Without that, the generic
+     to_ptr<M> fallback accepts any proxy as any type and overload
+     selection breaks.  See PHASE0_AUDIT.md for the design context. */
 
   /* Emit the SWIG type table. f_cpp_wrappers is passed as the scope
      context for SwigType_emit_type_table (matlab pattern, line 470). */
@@ -1825,15 +1890,10 @@ int WASM_JS::classHandler(Node *n) {
             String *idx = (String *)Getitem(idx_list, k);
             String *cls = (String *)Getitem(cls_list, k);
             if (k > 0) Printv(cond, " && ", NIL);
-            bool is_vec = false;
+            /* O(1) vector check via is_vector_jsname (same pattern as
+               the arg0 dispatcher above). */
+            bool is_vec = is_vector_jsname && Getattr(is_vector_jsname, cls) != 0;
             String *elem_class = 0;
-            if (cpp_to_js_vector_class) {
-              Iterator vit = First(cpp_to_js_vector_class);
-              while (vit.key) {
-                if (Strcmp((String *)vit.item, cls) == 0) { is_vec = true; break; }
-                vit = Next(vit);
-              }
-            }
             if (is_vec) {
               int cl = Len(cls);
               if (cl > 6 && strcmp(Char(cls) + cl - 6, "Vector") == 0) {
@@ -1848,7 +1908,7 @@ int WASM_JS::classHandler(Node *n) {
             }
           }
           Printf(ctor_js,
-            "          if (%s) { __ptr = M._%s(%s); break; }\n",
+            "          if (%s) { __ptr = __chk(M._%s(%s)); break; }\n",
             cond, sw, call_args ? Char(call_args) : "");
           Delete(cond); Delete(idx_list); Delete(cls_list);
         } else if (!fallback) {
@@ -1859,7 +1919,7 @@ int WASM_JS::classHandler(Node *n) {
         String *sw = (String *)Getattr(fallback, "swig_name");
         String *call_args = (String *)Getattr(fallback, "call_args_js");
         Printf(ctor_js,
-          "          __ptr = M._%s(%s); break;\n",
+          "          __ptr = __chk(M._%s(%s)); break;\n",
           sw, call_args ? Char(call_args) : "");
       } else {
         Printf(ctor_js,
@@ -1986,8 +2046,20 @@ int WASM_JS::constructorHandler(Node *n) {
     String *prologue = parm_prologue(p);
     String *frees    = parm_freeargs(p);
 
+    /* Body wrapped in `{ }` so prologue locals are out of scope at the
+       `fail:` label (otherwise C++ rejects the goto with "bypasses
+       initialization").  Same shape as cpp_call_body. */
     Printf(class_cpp_section,
-      "EMSCRIPTEN_KEEPALIVE %s* %s(%s) {\n%s  %s* _outv = new %s(%s);\n%s  return _outv;\n}\n",
+      "EMSCRIPTEN_KEEPALIVE %s* %s(%s) {\n"
+      "  {\n"
+      "%s"
+      "    %s* _outv = new %s(%s);\n"
+      "%s"
+      "    return _outv;\n"
+      "  }\n"
+      "fail:\n"
+      "  return 0;\n"
+      "}\n",
       class_cname, swig_name, decls,
       prologue,
       class_cname, class_cname, args,
@@ -2012,32 +2084,15 @@ int WASM_JS::constructorHandler(Node *n) {
     for (Parm *q = p; q; q = nextSibling(q), ++parm_idx) {
       if (is_in_numinputs0(q)) continue;
       SwigType *t = Getattr(q, "type");
-      if (t && is_registered_class_type(t)) {
-        SwigType *resolved = SwigType_typedef_resolve_all(t);
-        String *sn = SwigType_str(resolved ? resolved : t, 0);
-        const char *cs = Char(sn);
-        int cn = Len(sn);
-        if (cn > 6 && strncmp(cs, "const ", 6) == 0) { cs += 6; cn -= 6; }
-        for (;;) {
-          while (cn > 0 && (cs[cn-1] == '&' || cs[cn-1] == '*' ||
-                            cs[cn-1] == ' ' || cs[cn-1] == '\t')) cn--;
-          if (cn > 6 && strncmp(cs + cn - 6, " const", 6) == 0) { cn -= 6; continue; }
-          break;
-        }
-        String *bare = NewStringWithSize(cs, cn);
-        String *hit = (String *)Getattr(cpp_to_js_class, bare);
-        if (!hit && cn > 8 && strncmp(cs, "casadi::", 8) == 0) {
-          String *stripped = NewStringWithSize(cs + 8, cn - 8);
-          hit = (String *)Getattr(cpp_to_js_class, stripped);
-          Delete(stripped);
-        }
+      if (t) {
+        /* Canonical helper handles cv/ref/ptr stripping, typedef and
+           namestr forms, plus last-:: namespace fallback. */
+        String *hit = lookup_js_class(t);
         if (hit && Len(hit) > 0) {
           if (Len(dispatch_idxs) > 0) { Printv(dispatch_idxs, " ", NIL); Printv(dispatch_clss, " ", NIL); }
           Printf(dispatch_idxs, "%d", parm_idx);
           Printv(dispatch_clss, hit, NIL);
         }
-        Delete(bare); Delete(sn);
-        if (resolved) Delete(resolved);
       }
     }
     if (Len(dispatch_idxs) > 0) {
@@ -2133,21 +2188,34 @@ int WASM_JS::memberfunctionHandler(Node *n) {
   String *call_e = NewStringf("self->%s(%s)", mname, args);
   String *body   = cpp_call_body(p, rt, call_e);
 
+  /* Wrapper signature: self flows through as an EM_VAL handle just like
+     any other class parm (Phase 1.2 — closes the val-convention bypass).
+     Extract the C++ pointer via SWIG_ConvertPtr before invoking the
+     regular body.  SWIG_fail in the prologue routes to the body's
+     `fail:` label (emitted by cpp_call_body). */
   Printf(class_cpp_section,
-    "EMSCRIPTEN_KEEPALIVE %s %s(%s%s* self%s%s) {\n%s}\n",
-    ret_t, swig_name, self_q, class_cname,
+    "EMSCRIPTEN_KEEPALIVE %s %s(EM_VAL self_handle%s%s) {\n"
+    "  %s%s* self = 0;\n"
+    "  {\n"
+    "    void* _self_raw = 0;\n"
+    "    if (!SWIG_IsOK(SWIG_ConvertPtr(self_handle, &_self_raw, 0, 0))) "
+        "SWIG_exception_fail(SWIG_TypeError, \"self conversion failed\");\n"
+    "    self = static_cast<%s%s*>(_self_raw);\n"
+    "  }\n"
+    "%s}\n",
+    ret_t, swig_name,
     Len(decls) > 0 ? ", " : "", decls,
+    self_q, class_cname,
+    self_q, class_cname,
     body);
   register_export(Char(swig_name));
 
   SwigType *eff_rt = effective_js_return_type(rt, p);
-  /* Use emit_js_body so jsin/jsarg/jsfree typemaps fire -- needed for
-     Array <-> XVector autoconversion (the typemaps emitted by
-     %wasm_vec in casadi.i).  self_prefix = "this._ptr" makes the
-     wasm call site `M._<swig>(this._ptr, ...)`. */
+  /* JS-side: self also goes through __unwrap so the wasm call receives an
+     EM_VAL for `this`.  Symmetric with other class parms. */
   if (!Getattr(member_names_seen, jsraw)) {
     Setattr(member_names_seen, jsraw, "1");
-    String *js_body_str = emit_js_body(p, eff_rt ? eff_rt : rt, swig_name, "this._ptr");
+    String *js_body_str = emit_js_body(p, eff_rt ? eff_rt : rt, swig_name, "__unwrap(this)");
     Printf(class_js_body,
       "    %s(%s) {\n%s    }\n",
       jsraw, jsargs, js_body_str);
@@ -2312,29 +2380,8 @@ int WASM_JS::globalfunctionHandler(Node *n) {
   while (first && is_in_numinputs0(first)) first = nextSibling(first);
   if (first) {
     SwigType *t = Getattr(first, "type");
-    if (t && cpp_to_js_class) {
-      String *cn = SwigType_str(t, 0);
-      const char *cs = Char(cn);
-      int cnn = Len(cn);
-      while (cnn > 0 && (cs[0] == ' ' || cs[0] == '\t')) { cs++; cnn--; }
-      while (cnn > 0 && (cs[cnn-1] == ' ' || cs[cnn-1] == '\t')) cnn--;
-      if (cnn > 6 && strncmp(cs, "const ", 6) == 0) { cs += 6; cnn -= 6; }
-      for (;;) {
-        while (cnn > 0 && (cs[cnn-1] == '&' || cs[cnn-1] == '*' ||
-                           cs[cnn-1] == ' ' || cs[cnn-1] == '\t')) cnn--;
-        if (cnn > 6 && strncmp(cs + cnn - 6, " const", 6) == 0) { cnn -= 6; continue; }
-        break;
-      }
-      String *bare = NewStringWithSize(cs, cnn);
-      String *hit = (String *)Getattr(cpp_to_js_class, bare);
-      if (!hit && cnn > 8 && strncmp(cs, "casadi::", 8) == 0) {
-        String *stripped = NewStringWithSize(cs + 8, cnn - 8);
-        hit = (String *)Getattr(cpp_to_js_class, stripped);
-        Delete(stripped);
-      }
-      if (hit) Append(arg0_class, hit);
-      Delete(cn); Delete(bare);
-    }
+    String *hit = t ? lookup_js_class(t) : 0;
+    if (hit) Append(arg0_class, hit);
   }
   Hash *entry = NewHash();
   Setattr(entry, "body", js_body);

@@ -30,15 +30,35 @@
 using emscripten::EM_VAL;
 typedef ::emscripten::_EM_VAL casadi_emval_struct;
 
-/* Last error -- compatibility stub for typemaps that test it. */
-static int SWIG_lasterror_code = 0;
+/* Thread-local-ish error slot.  wasm-js is single-threaded today, so
+   plain statics suffice.  Every generated wrapper emits a `fail:` label
+   that SWIG_fail / SWIG_exception_fail goto; the wrapper returns its
+   zero-initialised sentinel (`_ret`, 0 / null EM_VAL / null pointer) on
+   that path.  The JS side reads `_swig_last_error_*` after each call
+   to surface the failure. */
+static int  SWIG_lasterror_code = 0;
+static char SWIG_lasterror_msg[256] = "";
 
-/* No `fail:` label is emitted into wasm-js wrappers today, so SWIG_fail
-   and SWIG_exception_fail can't goto.  Treat them as no-ops; conversion
-   failures leak through to the C++ call (which is what the slim build did
-   pre-runtime-refactor).  TODO: emit a fail label in cpp_call_body and
-   restore the goto-fail semantics. */
-#define SWIG_fail                                       do { } while (0)
+SWIGINTERN void SWIG_WASMJS_set_error(int code, const char *msg) {
+  SWIG_lasterror_code = code;
+  if (msg) {
+    size_t n = 0;
+    while (msg[n] && n < sizeof(SWIG_lasterror_msg) - 1) ++n;
+    for (size_t i = 0; i < n; ++i) SWIG_lasterror_msg[i] = msg[i];
+    SWIG_lasterror_msg[n] = '\0';
+  } else {
+    SWIG_lasterror_msg[0] = '\0';
+  }
+}
+
+/* The wrappers emit a `fail:` label after the regular return path
+   (wasm_js.cxx::cpp_call_body).  goto-driven fast exit on conversion
+   failure; the JS dispatcher checks _swig_last_error_code() after each
+   call and throws. */
+#define SWIG_fail                                       goto fail
+#define SWIG_exception_fail(code, msg)                  do { SWIG_WASMJS_set_error((code), (msg)); goto fail; } while (0)
+#define SWIG_exception(code, msg)                       do { SWIG_WASMJS_set_error((code), (msg)); } while (0)
+#define SWIG_Error(code, msg)                           do { SWIG_WASMJS_set_error((code), (msg)); } while (0)
 
 #define SWIG_ConvertPtr(obj, pptr, type, flags)         SWIG_WASMJS_ConvertPtr(obj, (void**)(pptr), type, flags)
 #define SWIG_ConvertPtrAndOwn(obj,pptr,type,flags,own)  SWIG_WASMJS_ConvertPtrAndOwn(obj, (void**)(pptr), type, flags, own)
@@ -49,11 +69,16 @@ static int SWIG_lasterror_code = 0;
 
 #define SWIG_MODULE_CLIENTDATA_TYPE void*
 
-/* No host runtime to push errors into: just record a code; the wasm
-   wrapper surfaces failure via boolean return / sentinel value. */
-#define SWIG_exception_fail(code, msg)  do { SWIG_lasterror_code = (code); (void)(msg); } while (0)
-#define SWIG_exception(code, msg)       do { SWIG_lasterror_code = (code); (void)(msg); } while (0)
-#define SWIG_Error(code, msg)           do { SWIG_lasterror_code = (code); (void)(msg); } while (0)
+/* JS-visible accessors.  Reading either clears the slot, so consecutive
+   reads are well-defined (subsequent ones see 0 / ""). */
+extern "C" EMSCRIPTEN_KEEPALIVE int swig_last_error_code(void) {
+  int c = SWIG_lasterror_code;
+  SWIG_lasterror_code = 0;
+  return c;
+}
+extern "C" EMSCRIPTEN_KEEPALIVE const char* swig_last_error_msg(void) {
+  return SWIG_lasterror_msg;
+}
 
 #ifndef SWIGINTERN
 #define SWIGINTERN       static
