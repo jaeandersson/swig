@@ -87,20 +87,92 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* swig_last_error_msg(void) {
 #define SWIGINTERNINLINE static inline
 #endif
 
+/* Phase 3.2: cast-chain + types-array init lives in the wrappers block,
+   wired up eagerly via a static-constructor object emitted by
+   wasm_js.cxx.  No forward declaration needed here -- the wrappers
+   block doesn't reach back into this runtime header. */
+
 /* Val-based ConvertPtr.  $input arrives as an EM_VAL handle for a JS
    value -- typically a SWIG proxy instance carrying a `_ptr` property
-   (the underlying C++ pointer).  Borrow ownership (take + release) so
-   the caller's refcount is preserved across the peek. */
+   (the underlying C++ pointer) and a `_swig_type` tag on its prototype.
+   Borrow ownership (take + release) so the caller's refcount is
+   preserved across the peek.
+
+   Phase 3.2: when `type` is non-null, validate type identity by walking
+   the cast chain (type->cast) and matching against the val's
+   `_swig_type` tag.  This enables dispatcher probes like
+   swig_can_Sparsity(MX_inst) to correctly return 0 (no match) instead
+   of accepting any proxy by virtue of having a `_ptr`.
+
+   Phase 4.3: when the proxy's from-type differs from the requested
+   `type`, ALSO invoke the cast-chain converter to apply C++
+   inheritance offset adjustment.  Without this, multi-inheritance
+   hierarchies where an intermediate base is non-polymorphic produce
+   wrong-offset pointers (e.g. `casadi::Function*` inside a
+   `SwigDirector_Callback` lives at +8 because Callback's vptr is at
+   offset 0 but Function has no virtuals).  Standard SWIG targets
+   (python, matlab) call cast->converter for the same reason; the
+   wasm-js target skipped it pre-Phase-4.3 because no director paths
+   exercised it.
+
+   When `type` is null (the legacy generic to_ptr<M> fallback), accept
+   any proxy carrying a `_ptr` -- preserves the dormant fallback path
+   while real callers route through the typed path. */
 SWIGRUNTIME int
-SWIG_WASMJS_ConvertPtrAndOwn(EM_VAL obj, void **pptr, swig_type_info *SWIGUNUSEDPARM(type),
+SWIG_WASMJS_ConvertPtrAndOwn(EM_VAL obj, void **pptr, swig_type_info *type,
                              int SWIGUNUSEDPARM(flags), int *own) {
   if (!obj) return SWIG_ERROR;
   emscripten::val v = emscripten::val::take_ownership(obj);
-  bool ok = v.hasOwnProperty("_ptr");
-  uintptr_t raw = ok ? v["_ptr"].as<uintptr_t>() : 0;
+  bool has_ptr = v.hasOwnProperty("_ptr");
+  if (!has_ptr) {
+    v.release_ownership();
+    return SWIG_ERROR;
+  }
+  uintptr_t raw = v["_ptr"].as<uintptr_t>();
+  void *p = reinterpret_cast<void*>(raw);
+  bool type_ok = true;
+  if (type) {
+    type_ok = false;
+    /* `_swig_type` lives on the proxy prototype, not as an own
+       property -- read through proto chain and check typeof. */
+    emscripten::val tprop = v["_swig_type"];
+    if (tprop.typeOf().as<std::string>() == "string") {
+      std::string vtag = tprop.as<std::string>();
+      if (vtag == type->name) {
+        /* Direct match: requested type IS the proxy's type, no
+           offset adjustment needed. */
+        type_ok = true;
+      } else {
+        /* Cast required.  Walk `type->cast` looking for an entry whose
+           `type->name` matches the proxy's tag.  When found, invoke
+           the converter -- the C++ cast helper that applies inheritance
+           offsets (e.g. `(Function*)(Callback*)x` for Callback->Function).
+
+           Important: SWIG cast_info arrays are TERMINATED by a sentinel
+           `{0, 0, 0, 0}` and entries are visited via POINTER ARITHMETIC
+           (++cast), not the `next` linked-list pointer.  The `next`
+           field is only populated by SWIG_InitializeModule, which we
+           skip in the wasm-js runtime.  Without init, `next == NULL`
+           on every entry -- so `cast = cast->next` would terminate
+           after the first entry, missing all the casts we need. */
+        swig_cast_info *cast = type->cast;
+        while (cast && cast->type && cast->type->name) {
+          if (vtag == cast->type->name) {
+            type_ok = true;
+            if (cast->converter) {
+              int newmemory = 0;
+              p = cast->converter(p, &newmemory);
+            }
+            break;
+          }
+          ++cast;
+        }
+      }
+    }
+  }
   v.release_ownership();
-  if (!ok) return SWIG_ERROR;
-  if (pptr) *pptr = reinterpret_cast<void*>(raw);
+  if (!type_ok) return SWIG_ERROR;
+  if (pptr) *pptr = p;
   if (own)  *own  = 0;
   return SWIG_OK;
 }

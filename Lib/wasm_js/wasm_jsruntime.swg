@@ -27,6 +27,10 @@
 %insert(runtime) "swigerrors.swg";
 %insert(runtime) "wasm_jsrun.swg";
 
+/* Note: director.swg is inserted from wasm_js.cxx::top() via
+   Swig_insert_file when Swig_directors_enabled() is true.  Same
+   pattern matlab.cxx / python.cxx use. */
+
 /* swiginit.swg defines SWIG_InitializeModule which walks the type table
    to resolve cast chains.  wasm-js does identity ConvertPtr (no runtime
    type check), so we don't call SWIG_InitializeModule -- the type table

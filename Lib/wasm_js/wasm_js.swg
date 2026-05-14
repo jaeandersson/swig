@@ -144,6 +144,19 @@ _argouts[_argout_idx++] = (void*)(X);
 %typemap(jsout) bool "(!!($call))"
 
 // ============================================================================
+// long long / unsigned long long (and typedefs like casadi_int) — wrap
+// the JS arg with BigInt() at the wasm-call boundary so users can pass
+// plain `Number` literals for matrix dimensions, indices, etc.  Without
+// this, embind throws "Cannot convert ... to BigInt" when a Number is
+// passed to a wasm import declared with i64 params.  The wrap is
+// idempotent for already-BigInt values.
+// ============================================================================
+
+%typemap(jsarg) long long, const long long&, long long&,
+               unsigned long long, const unsigned long long&, unsigned long long&
+               "BigInt($input)"
+
+// ============================================================================
 // %wasm_vec(T, NAME) — JS-side `Array <-> XVector` autoconversion typemaps
 // ============================================================================
 //
@@ -176,6 +189,7 @@ _argouts[_argout_idx++] = (void*)(X);
 %typemap(jsout) std::vector<T>, const std::vector<T>&, std::vector<T>&
 "__vec_to_arr(new NAME(__PRIVATE_CTOR, __from_handle($call)))"
 %enddef
+
 
 // (Note: the previous `%wasm_vector(T)` macro -- an opaque-builder
 // convention for vector types -- has been removed.  Vector marshaling

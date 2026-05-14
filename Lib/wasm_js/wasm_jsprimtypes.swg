@@ -2,17 +2,11 @@
  *
  * Primitive-type SWIG_AsVal/SWIG_From fragments for the -wasm-js target.
  *
- * On wasm_js, primitives don't round-trip through GUESTOBJECT at
- * runtime -- the direct ctype/in/out typemaps in wasm_js.swg handle
- * them via the wasm-export ABI (int, double, etc.).
- *
- * These fragments exist purely to satisfy casadi.i's structural fragment
- * dependencies (e.g. casadi_bool depends on SWIG_AsVal_frag(bool)).
- * They use a "boxed primitive" convention: a void* p is interpreted as a
- * pointer to the underlying primitive's storage.  If a SWIG-generated
- * path ever calls these at runtime (it shouldn't in our flow -- direct
- * typemaps win first), they'll work correctly on a properly-boxed
- * pointer.
+ * Direct wasm-export ABI handles primitives in the typical call path,
+ * but `casadi::to_ptr(GUESTOBJECT*, double**)` etc. routes through
+ * SWIG_AsVal as the fuzzy-coercion entry point (Phase 3.4).  We
+ * therefore inspect the EM_VAL via emscripten::val.typeOf() and accept
+ * numeric / bigint inputs.
  *
  * Companion to wasm_js.swg (top-level typemap library).
  */
@@ -36,14 +30,34 @@
 #ifndef SWIG_POINTER_OWN
 #define SWIG_POINTER_OWN  0x1
 #endif
+
+#include <emscripten/val.h>
 %}
 
+/* Phase 3.4: EM_VAL-aware primitive coercion.  `p` is an EM_VAL cast to
+   void* (the wasm-js GUESTOBJECT*).  Borrow ownership (take + release)
+   so the caller's refcount stays intact.  Accept JS `number` and
+   `bigint`; reject everything else.  BigInts can't be directly
+   `.as<double>()`-cast in embind (throws "Cannot convert a BigInt"),
+   so we route BigInts through `Number(v)` in JS first. */
 %define %wasm_js_primtype_asval(T)
 %fragment(SWIG_AsVal_frag(T), "header") {
 SWIGINTERN int SWIG_AsVal_dec(T)(void* p, T* val) {
   if (!p) return SWIG_ERROR;
-  if (val) *val = *static_cast<T*>(p);
-  return SWIG_OK;
+  emscripten::val v = emscripten::val::take_ownership(
+      reinterpret_cast< ::emscripten::EM_VAL >(p));
+  std::string ty = v.typeOf().as<std::string>();
+  bool ok = (ty == "number" || ty == "bigint");
+  if (ok && val) {
+    if (ty == "bigint") {
+      emscripten::val nv = emscripten::val::global("Number")(v);
+      *val = static_cast< T >(nv.as<double>());
+    } else {
+      *val = v.as< T >();
+    }
+  }
+  v.release_ownership();
+  return ok ? SWIG_OK : SWIG_ERROR;
 }
 }
 %enddef
@@ -63,12 +77,21 @@ SWIGINTERNINLINE void* SWIG_From_dec(T)(T value) {
 %wasm_js_primtype_from(T)
 %enddef
 
-/* bool: special-cased because we want strict 0/1 normalisation. */
+/* bool: special-cased.  JS `true`/`false` map to bool; permissively
+   also accept truthy numbers (so `0` / `1` from BigInt round-trip). */
 %fragment(SWIG_AsVal_frag(bool), "header") {
 SWIGINTERN int SWIG_AsVal_dec(bool)(void* p, bool* val) {
   if (!p) return SWIG_ERROR;
-  if (val) *val = (*static_cast<int*>(p)) != 0;
-  return SWIG_OK;
+  emscripten::val v = emscripten::val::take_ownership(
+      reinterpret_cast< ::emscripten::EM_VAL >(p));
+  std::string ty = v.typeOf().as<std::string>();
+  bool ok = (ty == "boolean" || ty == "number" || ty == "bigint");
+  if (ok && val) {
+    if (ty == "boolean") *val = v.as<bool>();
+    else                 *val = v.as<double>() != 0.0;
+  }
+  v.release_ownership();
+  return ok ? SWIG_OK : SWIG_ERROR;
 }
 }
 %fragment(SWIG_From_frag(bool), "header") {

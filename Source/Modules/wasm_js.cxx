@@ -40,7 +40,9 @@ public:
   WASM_JS()
     : f_out_cpp(0), f_out_js(0), f_out_exports(0),
       f_cpp_runtime(0), f_cpp_header(0), f_cpp_wrappers(0), f_cpp_init(0),
-      f_js_pre(0), f_js_classes(0), f_js_module(0),
+      f_directors(0), f_directors_h(0),
+      f_js_pre(0), f_js_classes(0), f_js_module(0), f_js_user(0),
+      director_classes(0),
       class_cname(0), class_jsname(0),
       class_js_body(0), class_cpp_section(0),
       enum_cname(0), enum_js_body(0),
@@ -53,7 +55,18 @@ public:
       js_to_cpp_canonical(0),
       classes_needing_probes(0),
       global_overloads(0),
-      class_has_base(false) {}
+      static_overloads(0),
+      member_overloads(0),
+      class_has_base(false) {
+    /* Phase 4.3: director-language support active.  Lib/wasm_js/director.swg
+       provides Swig::Director (EM_VAL handle holder) + exception classes.
+       classDirectorInit/End/Constructor/DefaultConstructor below emit a
+       well-formed SwigDirector_<C> class.  classDirectorMethod NOT yet
+       overridden -- virtuals currently fall through to the base C++ impl;
+       JS-side dispatch (JS subclass.eval() called from C++) is the
+       remaining work.  See test/javascript/PHASE_4_3_AND_5_1_PLAN.md. */
+    directorLanguage();
+  }
 
   /* Allocate a unique-per-(scope, name) C identifier suffix. */
   int next_index(Hash *h, const String *key) {
@@ -79,6 +92,15 @@ public:
     if (nt && Strcmp(nt, "class") == 0) {
       String *jsname = Getattr(n, "sym:name");
       SwigType *t = Getattr(n, "name");
+      /* SWIG synthesises `__dummy_<N>__` sym names for unnamed
+         `%template()` instantiations.  These have no JS proxy, no
+         swig_type_info entry -- skip the registration so they don't
+         appear in dispatcher arg-class lookups. */
+      if (jsname && Strncmp(jsname, "__dummy_", 8) == 0) {
+        prepopulate_class_names(firstChild(n));
+        prepopulate_class_names(nextSibling(n));
+        return;
+      }
       if (jsname && t) {
         String *cn = SwigType_str(t, 0);
         Setattr(cpp_to_js_class, cn, jsname);
@@ -160,6 +182,26 @@ public:
   virtual int enumDeclaration(Node *n);
   virtual int enumvalueDeclaration(Node *n);
 
+  /* Phase 4.3 director hooks.  Emit a SwigDirector_<C> class plus
+     per-virtual overrides that bridge into JS via emscripten::val.
+     Type coverage in classDirectorMethod is intentionally limited
+     to the set needed by casadi::Callback's virtual API:
+       std::vector<DM>, casadi_int, bool, std::string, void.
+     For methods with unsupported parm/return types, the override is
+     not emitted -- virtual dispatch falls through to the base C++
+     impl.  Pre-Phase-4.3 callers see no behavior change. */
+  virtual int classDirectorInit(Node *n);
+  virtual int classDirectorEnd(Node *n);
+  virtual int classDirectorConstructor(Node *n);
+  virtual int classDirectorDefaultConstructor(Node *n);
+  virtual int classDirectorMethod(Node *n, Node *parent, String *super);
+
+  /* Per-class C-linkage director ctor wrapper export name + flag set
+     by classHandler for director-enabled classes.  When the wrapper
+     is emitted, the JS-side proxy ctor learns to detect new.target
+     subclassing and route through it. */
+  Hash *director_classes;  /* C++ classname -> "1" if director-enabled */
+
 protected:
   File   *f_out_cpp;
   File   *f_out_js;
@@ -173,9 +215,23 @@ protected:
   String *f_cpp_header;
   String *f_cpp_wrappers;
   String *f_cpp_init;
+  /* Phase 4.3 director slots.  f_directors_h: SwigDirector_<C> class header
+     decls.  f_directors: implementations.  Registered as "director_h" /
+     "director" file slots so the base Language::classDirector* code can
+     write into them via Swig_filebyname(). */
+  String *f_directors;
+  String *f_directors_h;
   String *f_js_pre;
   String *f_js_classes;
   String *f_js_module;
+  String *f_js_user;     /* Free-form user JS, %insert("js") {...}; emitted
+                            after class defs AND after the module literal
+                            (bound to `__m`) is built, but before the
+                            factory returns.  Lets user .i files patch both
+                            SWIG-emitted prototype methods (Function.prototype...)
+                            and the module-level functions (__m.horzcat,
+                            __m.vertcat, ...).  Reference `__m` to patch
+                            module exports. */
 
   String *class_cname;
   String *class_jsname;
@@ -230,6 +286,18 @@ protected:
                                        arity}>.  Built in globalfunctionHandler,
                                        drained in top() to emit a dispatcher per
                                        jsname (arg0-type based). */
+  Hash   *static_overloads;        /* jsname -> List<Hash{swig_name, jsargs,
+                                       arity, prim_checks, call_args_js,
+                                       js_body}>.  Built in
+                                       staticmemberfunctionHandler, drained in
+                                       classHandler end to emit a per-arity
+                                       dispatcher (so MX.sym("a") routes to
+                                       sym(name) not sym(name, undefined,
+                                       undefined)). */
+  Hash   *member_overloads;        /* Same shape as static_overloads but for
+                                       non-static member methods.  Lets
+                                       Sparsity.row(k) and Sparsity.row()
+                                       coexist via args.length dispatch. */
   bool   class_has_base;
 
   String *mangle(const String *s) {
@@ -250,8 +318,13 @@ protected:
 
   /* Mark a JS class as needing a `swig_can_<Class>` probe wrapper.
      Called from dispatcher-emit sites; the actual wrapper is emitted at
-     end-of-top() in emit_probe_wrappers(). */
+     end-of-top() in emit_probe_wrappers().  Filter SWIG-internal
+     `__dummy_<N>__` names (unnamed `%template()` instantiations) -- no
+     real proxy exists, so the probe would reference a nonexistent
+     swig_type_info symbol and fail to link. */
   void register_probe(const String *jsname) {
+    if (!jsname || Len(jsname) == 0) return;
+    if (Strncmp(jsname, "__dummy_", 8) == 0) return;
     if (!classes_needing_probes) classes_needing_probes = NewHash();
     Setattr(classes_needing_probes, jsname, "1");
   }
@@ -264,24 +337,68 @@ protected:
      goes through the same fuzzy-coercion path as matlab/python. */
   void emit_probe_wrappers() {
     if (!classes_needing_probes || !js_to_cpp_canonical) return;
-    Printf(f_cpp_wrappers, "\n/* --- Probe wrappers (Phase 3.1): "
-                           "wasm-side can_convert<T> dispatch helpers --- */\n");
+    Printf(f_cpp_wrappers, "\n/* --- Probe wrappers (Phase 3.3): "
+                           "wasm-side dispatch helpers.  Each probe does\n"
+                           "   strict tag-string match against the JS\n"
+                           "   proxy's `_swig_type` prototype property,\n"
+                           "   then falls back to can_convert<T> for\n"
+                           "   fuzzy-coercion paths (array/Dict/scalar).\n"
+                           "\n"
+                           "   Tag-string match (rather than SWIG_ConvertPtr\n"
+                           "   with a swig_type_info pointer) avoids hard\n"
+                           "   dependence on the type-info table being\n"
+                           "   populated for every wrapped class.  In\n"
+                           "   particular, std::vector<casadi_int> /\n"
+                           "   std::vector<double> wrap as JS classes but\n"
+                           "   never appear as a pointer in SWIG wrappers,\n"
+                           "   so SwigType_emit_type_table omits their\n"
+                           "   swig_type_info entries -- a symbol reference\n"
+                           "   would fail to link.  --- */\n");
     Iterator it = First(classes_needing_probes);
     while (it.key) {
       String *jsname = (String *)it.key;
       String *cpp_t  = (String *)Getattr(js_to_cpp_canonical, jsname);
       if (cpp_t && Len(cpp_t) > 0) {
         String *swig_name = NewStringf("swig_can_%s", jsname);
-        /* Stash the type expression in a typedef-aliased local to avoid
-           template-comma tokenization issues at the macro level. */
+        SwigType *t = NewString(cpp_t);
+        SwigType *t_ptr = Copy(t);
+        SwigType_add_pointer(t_ptr);
+        String *swig_tag = SwigType_manglestr(t_ptr);  /* "_p_..." */
         Printf(f_cpp_wrappers,
           "EMSCRIPTEN_KEEPALIVE int %s(EM_VAL p) {\n"
+          "  if (!p) return 0;\n"
+          "  emscripten::val _v = emscripten::val::take_ownership(p);\n"
+          "  std::string _ty = _v.typeOf().as<std::string>();\n"
+          "  /* Primitives never match a class probe -- matches the old\n"
+          "     `arg.constructor.name === ClassName` semantics and keeps\n"
+          "     integer-arg overloads (e.g. MX(rows, cols)) from being\n"
+          "     preempted by class probes that would fuzzy-accept scalars\n"
+          "     via to_ptr<T>'s scalar coercion path. */\n"
+          "  if (_ty == \"string\" || _ty == \"number\" || _ty == \"bigint\"\n"
+          "      || _ty == \"boolean\") {\n"
+          "    _v.release_ownership();\n"
+          "    return 0;\n"
+          "  }\n"
+          "  /* `_swig_type` lives on the proxy prototype, not as an own\n"
+          "     property -- check via typeof to follow the proto chain. */\n"
+          "  emscripten::val _tprop = _v[\"_swig_type\"];\n"
+          "  bool _has_tag = (_tprop.typeOf().as<std::string>() == \"string\");\n"
+          "  if (_has_tag) {\n"
+          "    std::string _tag = _tprop.as<std::string>();\n"
+          "    bool _match = (_tag == \"%s\");\n"
+          "    _v.release_ownership();\n"
+          "    return _match ? 1 : 0;\n"
+          "  }\n"
+          "  _v.release_ownership();\n"
           "  typedef %s _T;\n"
           "  return casadi::can_convert<_T>(p) ? 1 : 0;\n"
           "}\n",
-          swig_name, cpp_t);
+          swig_name, swig_tag, cpp_t);
         register_export(Char(swig_name));
         Delete(swig_name);
+        Delete(swig_tag);
+        Delete(t_ptr);
+        Delete(t);
       }
       it = Next(it);
     }
@@ -509,6 +626,98 @@ protected:
     return n;
   }
 
+  /* JS-visible arity: count only parms that contribute a real JS arg
+     (skip `tmap:in:numinputs=0` parms like argout-only references).
+     Must mirror js_arg_names exactly so the dispatcher's
+     `args.length` case key matches what the user actually passes. */
+  int parm_arity_js(ParmList *p) {
+    Swig_typemap_attach_parms("in", p, 0);
+    int n = 0;
+    for (Parm *q = p; q; q = nextSibling(q)) {
+      if (is_in_numinputs0(q)) continue;
+      ++n;
+    }
+    return n;
+  }
+
+  /* Find the JS-index of the first parm with a default value, where the
+     entire suffix is also defaulted.  -1 if no defaults at all.  Used
+     to drive the truncation loop for default-arg phantom overloads. */
+  int first_default_arity(ParmList *p) {
+    int js_idx = 0;
+    int first = -1;
+    for (Parm *q = p; q; q = nextSibling(q)) {
+      if (is_in_numinputs0(q)) continue;
+      String *v = Getattr(q, "value");
+      if (v && Len(v) > 0) {
+        if (first == -1) first = js_idx;
+      } else {
+        /* A non-defaulted parm appears after a defaulted one --
+           reset (shouldn't happen with valid C++ default-arg
+           semantics). */
+        first = -1;
+      }
+      ++js_idx;
+    }
+    return first;
+  }
+
+  /* Build the JS-side defaults prologue for a truncated arity.  Emits
+     `const a<i> = <jslit>;` for each missing arg, where <jslit> is a
+     BigInt literal for integer-typed parms, a plain number for
+     float-typed, etc.  Unrecognised default expressions get
+     `undefined`.  Returns a fresh String the caller must Delete. */
+  String *build_defaults_prologue(ParmList *p, int trunc) {
+    String *out = NewString("");
+    int s = 0;
+    for (Parm *q = p; q; q = nextSibling(q)) {
+      if (is_in_numinputs0(q)) continue;
+      if (s >= trunc) {
+        String *val = Getattr(q, "value");
+        SwigType *t = Getattr(q, "type");
+        SwigType *tres = t ? SwigType_typedef_resolve_all(t) : 0;
+        String *ts = SwigType_str(tres ? tres : t, 0);
+        const char *cs = ts ? Char(ts) : "";
+        bool emitted = false;
+        if (val && Len(val) > 0) {
+          const char *vs = Char(val);
+          bool looks_numeric = false;
+          {
+            const char *q2 = vs;
+            while (*q2 == ' ') ++q2;
+            if (*q2 == '-' || *q2 == '+') ++q2;
+            if (*q2 >= '0' && *q2 <= '9') looks_numeric = true;
+          }
+          bool is_bool_kw = (strcmp(vs, "true") == 0 || strcmp(vs, "false") == 0);
+          /* C++ string-literal defaults (`"reference"`) are valid JS
+             string literals as-is; pass through for string-typed parms. */
+          bool is_string_lit = (vs[0] == '"');
+          if (is_bool_kw) {
+            Printf(out, "      const a%d = %s;\n", s, vs);
+            emitted = true;
+          } else if (looks_numeric) {
+            if (strstr(cs, "int") || strstr(cs, "long") || strstr(cs, "short")) {
+              Printf(out, "      const a%d = %sn;\n", s, vs);
+            } else {
+              Printf(out, "      const a%d = %s;\n", s, vs);
+            }
+            emitted = true;
+          } else if (is_string_lit) {
+            Printf(out, "      const a%d = %s;\n", s, vs);
+            emitted = true;
+          }
+        }
+        if (!emitted) {
+          Printf(out, "      const a%d = undefined;\n", s);
+        }
+        if (ts) Delete(ts);
+        if (tres) Delete(tres);
+      }
+      ++s;
+    }
+    return out;
+  }
+
   /* Emit a JS method body: jsin prologue per parm, wasm call, jsout to
      marshal return, jsfree per parm post-call.  Skips numinputs=0 parms
      entirely (no JS-side input, no wasm-export arg). */
@@ -517,6 +726,7 @@ protected:
     Swig_typemap_attach_parms("jsarg", p, 0);
     Swig_typemap_attach_parms("jsfree", p, 0);
     Swig_typemap_attach_parms("in",    p, 0);
+    Swig_typemap_attach_parms("ctype", p, 0);
 
     String *out = NewString("");
 
@@ -559,13 +769,24 @@ protected:
         Replaceall(expr, "$argnum", idxs);
         Printv(call_args, expr, NIL);
         Delete(expr);
-      } else if (is_registered_class_type(Getattr(q, "type"))) {
-        /* __unwrap handles null/undefined: passes 0 to the wasm export
-           instead of throwing on `null._ptr`.  Lets callers pass null
-           for default-arg slots (e.g. an unspecified Dict). */
-        Printf(call_args, "__unwrap(%s)", Char(aname));
       } else {
-        Printv(call_args, aname, NIL);
+        /* Generic rule: any parm whose `ctype` typemap is `EM_VAL`
+           crosses the wasm boundary as an i32 handle into Embind's
+           value table.  The JS side must hand the value to
+           `__swig_take_handle` first (via `__unwrap`).  This covers:
+             - Registered wrapped classes  (xType ctype = EM_VAL)
+             - Dict, SpDict, MXDict, ...   (xType ctype = EM_VAL)
+             - Sparsity, MX, SX, DM, ...   (same)
+           For primitive ctypes (int, double, const char*, ...) the
+           wasm ABI handles the value directly -- pass raw.
+           __unwrap also tolerates null/undefined (returns 0), letting
+           callers omit default-arg-slot dicts.  */
+        String *ctype = Getattr(q, "tmap:ctype");
+        if (ctype && Strcmp(ctype, "EM_VAL") == 0) {
+          Printf(call_args, "__unwrap(%s)", Char(aname));
+        } else {
+          Printv(call_args, aname, NIL);
+        }
       }
       Delete(aname); Delete(idxs);
       ++s;
@@ -951,6 +1172,36 @@ protected:
     String *name = Getattr(ni, "sym:name");
     Node *alias = Getattr(ni, "defaultargs");
     Node *source = alias ? alias : ni;
+
+    /* Phase 4.5: emit JSDoc above the signature if the node carries a
+       `feature:docstring` (set by SWIG when %feature("docstring") or
+       Doxygen-extracted prose is attached).  Multi-line docstrings
+       become a block comment with each line prefixed by ` * `. */
+    String *doc = Getattr(ni, "feature:docstring");
+    if (!doc) doc = Getattr(source, "feature:docstring");
+    if (doc && Len(doc) > 0) {
+      Printv(f, indent, "/**\n", NIL);
+      /* Split on newlines.  Trim leading whitespace from each line to
+         normalise the indentation; the JSDoc ` * ` prefix supplies its
+         own structure. */
+      String *src = NewString(doc);
+      List *lines = Split(src, '\n', -1);
+      for (int li = 0; li < Len(lines); ++li) {
+        String *ln = (String *)Getitem(lines, li);
+        const char *s = Char(ln);
+        while (*s == ' ' || *s == '\t') ++s;
+        /* Escape any star-slash sequence inside the docstring so it
+           doesn't prematurely close our JSDoc block. */
+        Printv(f, indent, " * ", NIL);
+        for (const char *p = s; *p; ++p) {
+          if (p[0] == '*' && p[1] == '/') { Printv(f, "* /", NIL); ++p; }
+          else { char tmp[2] = {*p, 0}; Printv(f, tmp, NIL); }
+        }
+        Printv(f, "\n", NIL);
+      }
+      Printv(f, indent, " */\n", NIL);
+      Delete(lines); Delete(src);
+    }
 
     Printv(f, indent, NIL);
     if (kind == 2) Printv(f, "static ", NIL);
@@ -1379,6 +1630,384 @@ protected:
   }
 };
 
+/* ============================ Phase 4.3 director hooks ====================== */
+/* Minimal scaffolding so the base Language::classDirector{Methods,Destructor}
+   output sits inside a well-formed `class SwigDirector_<C> : public <C>,
+   public Swig::Director { ... };` block.  We don't override classDirectorMethod
+   yet, so virtuals fall through to the base C++ impl (no JS-side dispatch).
+   This is enough to make builds compile when casadi.i has
+   `%feature("director")` lines. */
+
+int WASM_JS::classDirectorInit(Node *n) {
+  String *declaration = Swig_director_declaration(n);
+  Printf(f_directors_h, "\n%s\npublic:\n", declaration);
+  Delete(declaration);
+  return Language::classDirectorInit(n);
+}
+
+int WASM_JS::classDirectorEnd(Node *n) {
+  Printf(f_directors_h, "};\n\n");
+  return Language::classDirectorEnd(n);
+}
+
+int WASM_JS::classDirectorConstructor(Node *n) {
+  Node *parent = Getattr(n, "parentNode");
+  String *supername = Swig_class_name(parent);
+  String *classname = NewStringf("SwigDirector_%s", supername);
+  String *decl = Getattr(n, "decl");
+
+  /* Build parm list: prepend `EM_VAL js_self` to the user ctor's parms. */
+  ParmList *superparms = Getattr(n, "parms");
+  ParmList *parms = CopyParmList(superparms);
+  SwigType *self_type = NewString("EM_VAL");
+  Parm *self_p = NewParm(self_type, NewString("js_self"), n);
+  set_nextSibling(self_p, parms);
+  parms = self_p;
+
+  if (!Getattr(n, "defaultargs")) {
+    /* Implementation. */
+    Wrapper *w = NewWrapper();
+    String *target = Swig_method_decl(0, decl, classname, parms, 0);
+    String *call = Swig_csuperclass_call(0, Getattr(parent, "classtype"), superparms);
+    Printf(w->def, "%s::%s : %s, Swig::Director(js_self) { }\n\n",
+           classname, target, call);
+    Wrapper_print(w, f_directors);
+    Delete(target);
+    Delete(call);
+    DelWrapper(w);
+    /* Header decl. */
+    String *hdr = Swig_method_decl(0, decl, classname, parms, 1);
+    Printf(f_directors_h, "    %s;\n", hdr);
+    Delete(hdr);
+
+    /* C-linkage wrapper for the default ctor overload: superparms == 0
+       (no user parms besides js_self).  JS-side new.target hook calls
+       this when constructing the director instance. */
+    if (ParmList_len(superparms) == 0) {
+      Printf(f_cpp_wrappers,
+        "EMSCRIPTEN_KEEPALIVE void* swig_new_SwigDirector_%s(EM_VAL js_self) {\n"
+        "  return static_cast<void*>(new %s(js_self));\n"
+        "}\n",
+        supername, classname);
+      Printf(f_out_exports, "_swig_new_SwigDirector_%s\n", supername);
+      if (!director_classes) director_classes = NewHash();
+      Setattr(director_classes, Getattr(parent, "name"), "1");
+    }
+  }
+
+  Delete(classname);
+  Delete(supername);
+  Delete(self_type);
+  Delete(parms);
+  return Language::classDirectorConstructor(n);
+}
+
+int WASM_JS::classDirectorDefaultConstructor(Node *n) {
+  String *classname = Swig_class_name(n);
+  Node *parent = Swig_methodclass(n);
+  String *basetype = Getattr(parent, "classtype");
+  (void)basetype;
+
+  Wrapper *w = NewWrapper();
+  Printf(w->def, "SwigDirector_%s::SwigDirector_%s(EM_VAL js_self) : Swig::Director(js_self) { }\n\n",
+         classname, classname);
+  Wrapper_print(w, f_directors);
+  DelWrapper(w);
+
+  Printf(f_directors_h, "    SwigDirector_%s(EM_VAL js_self);\n", classname);
+
+  /* C-linkage wrapper exposing the director ctor to JS.  The JS proxy
+     class's ctor calls this when new.target detects a JS subclass.
+     Emitted into f_cpp_wrappers so it lands inside the extern "C" block. */
+  String *export_name = NewStringf("_swig_new_SwigDirector_%s", classname);
+  Printf(f_cpp_wrappers,
+    "EMSCRIPTEN_KEEPALIVE void* swig_new_SwigDirector_%s(EM_VAL js_self) {\n"
+    "  return static_cast<void*>(new SwigDirector_%s(js_self));\n"
+    "}\n",
+    classname, classname);
+  Printf(f_out_exports, "%s\n", export_name);
+  Delete(export_name);
+
+  /* Record director-enablement keyed by C++ classname so classHandler
+     can inject the JS-side new.target detection at ctor emission time. */
+  if (!director_classes) director_classes = NewHash();
+  Setattr(director_classes, Getattr(parent, "name"), "1");
+
+  Delete(classname);
+  return Language::classDirectorDefaultConstructor(n);
+}
+
+/* ============================ classDirectorMethod ===========================
+
+   For each virtual method of a director-marked class, emit a C++ override
+   that:
+     1. Calls swig_get_self() to get the JS proxy.
+     2. Checks if the JS subclass overrides this method (own-property check
+        on the proxy's direct prototype, walking up to but not including
+        the SWIG-generated Callback.prototype).  If not, dispatches to the
+        C++ base implementation -- avoids infinite recursion.
+     3. Builds an emscripten::val array of args using inline directorin
+        rules (one per supported type).
+     4. Calls the JS-side method, catching exceptions and rethrowing as
+        casadi exceptions.
+     5. Converts the JS return value back to C++ using inline directorout.
+
+   Supported types (intentionally minimal -- expand as needed):
+     - void              (return only)
+     - bool / casadi_int (in + out)
+     - std::string       (in + out)
+     - std::vector<DM>   (in + out)
+     - const T&          (treat same as T)
+
+   For unsupported types we return SWIG_OK without emitting an override:
+   the SwigDirector_<C> class then inherits that virtual unchanged from
+   the C++ base, which is the safe / no-op default. */
+
+// Reduce a SwigType to its "naked" form: typedef-resolved, with
+// leading/trailing const and trailing &/space stripped.  Used by both
+// the supported-type check and the in/out emitter so they classify the
+// same string.  Caller owns the returned String.
+static String *wasmjs_naked_type_str(SwigType *t) {
+  SwigType *tc = SwigType_typedef_resolve_all(t);
+  String *s = SwigType_str(tc, 0);
+  int changed = 1;
+  while (changed) {
+    changed = 0;
+    while (Strncmp(s, "const ", 6) == 0) { Delslice(s, 0, 6); changed = 1; }
+    int n = Len(s);
+    while (n > 0 && (Char(s)[n-1] == ' ' || Char(s)[n-1] == '&')) {
+      Delslice(s, n-1, n); n = Len(s); changed = 1;
+    }
+    if (n >= 6 && Strncmp(Char(s) + n - 6, " const", 6) == 0) {
+      Delslice(s, n - 6, n); changed = 1;
+    } else if (n >= 5 && Strncmp(Char(s) + n - 5, "const", 5) == 0
+                      && (n == 5 || Char(s)[n-6] == ' ')) {
+      Delslice(s, n - 5, n); changed = 1;
+    }
+  }
+  Delete(tc);
+  return s;
+}
+
+// Return true if `t` matches one of our handled in-direction types.
+static bool wasmjs_director_type_supported(SwigType *t) {
+  String *s = wasmjs_naked_type_str(t);
+  bool ok =
+       (Cmp(s, "void") == 0)
+    || (Cmp(s, "bool") == 0)
+    || (Cmp(s, "int") == 0)
+    || (Cmp(s, "casadi_int") == 0)
+    || (Cmp(s, "long long") == 0)
+    || (Cmp(s, "long") == 0)
+    || (Cmp(s, "std::string") == 0)
+    || (Cmp(s, "std::vector< casadi::DM >") == 0)
+    || (Cmp(s, "std::vector< Matrix< double > >") == 0)
+    || (Cmp(s, "std::vector< casadi::Matrix< double > >") == 0);
+  Delete(s);
+  return ok;
+}
+
+// Emit a C++ expression that converts the C++ value `cpp_expr` of type `t`
+// into an emscripten::val on the JS side.  Appends to `out`.
+static void wasmjs_emit_cpp_to_val(String *out, SwigType *t, const char *cpp_expr) {
+  String *s = wasmjs_naked_type_str(t);
+  if (Cmp(s, "bool") == 0 || Cmp(s, "int") == 0
+      || Cmp(s, "casadi_int") == 0 || Cmp(s, "long long") == 0
+      || Cmp(s, "long") == 0) {
+    Printf(out, "emscripten::val(static_cast<double>(%s))", cpp_expr);
+  } else if (Cmp(s, "std::string") == 0) {
+    Printf(out, "emscripten::val(std::string(%s))", cpp_expr);
+  } else if (Cmp(s, "std::vector< casadi::DM >") == 0
+          || Cmp(s, "std::vector< Matrix< double > >") == 0
+          || Cmp(s, "std::vector< casadi::Matrix< double > >") == 0) {
+    // Build a JS array of DM proxies.  Each DM is heap-copied, then
+    // wrapped via M.__wrap_DM(ptr) -> `new DM(__PRIVATE_CTOR, ptr)`
+    // so user-side eval(args) sees real DM instances (with
+    // .nonzeros(), .size1(), etc.), not raw {_ptr} carriers.
+    Printf(out, "([&](){ emscripten::val __a = emscripten::val::array(); "
+                "emscripten::val __wrap = emscripten::val::module_property(\"__wrap_DM\"); "
+                "for (size_t __i = 0; __i < (%s).size(); ++__i) { "
+                "casadi::DM *__p = new casadi::DM((%s)[__i]); "
+                "__a.call<void>(\"push\", __wrap(emscripten::val((uintptr_t)__p))); "
+                "} return __a; })()",
+                cpp_expr, cpp_expr);
+  } else {
+    Printf(out, "/* unsupported directorin: %s */ emscripten::val::undefined()", s);
+  }
+  Delete(s);
+}
+
+// Emit a C++ expression that converts a JS val into the C++ return type `t`.
+// `js_expr` is a C++ snippet evaluating to emscripten::val.
+static void wasmjs_emit_val_to_cpp(String *out, SwigType *t, const char *js_expr) {
+  String *s = wasmjs_naked_type_str(t);
+  if (Cmp(s, "void") == 0) {
+    Printf(out, "((void)(%s))", js_expr);
+  } else if (Cmp(s, "bool") == 0) {
+    Printf(out, "((%s).as<bool>())", js_expr);
+  } else if (Cmp(s, "int") == 0) {
+    Printf(out, "((%s).as<int>())", js_expr);
+  } else if (Cmp(s, "casadi_int") == 0 || Cmp(s, "long long") == 0
+          || Cmp(s, "long") == 0) {
+    // JS users may return either a Number (5) or a BigInt (5n) for
+    // casadi_int.  Probe typeOf and call as<long long>()/as<double>()
+    // accordingly; embind rejects mismatched wire types.
+    Printf(out, "([&](){ emscripten::val __v = (%s); "
+                "if (__v.typeOf().as<std::string>() == \"bigint\") "
+                "return static_cast<%s>(__v.as<long long>()); "
+                "return static_cast<%s>(__v.as<double>()); })()",
+                js_expr, s, s);
+  } else if (Cmp(s, "std::string") == 0) {
+    Printf(out, "((%s).as<std::string>())", js_expr);
+  } else if (Cmp(s, "std::vector< casadi::DM >") == 0
+          || Cmp(s, "std::vector< Matrix< double > >") == 0
+          || Cmp(s, "std::vector< casadi::Matrix< double > >") == 0) {
+    // For each element (which is a JS DM proxy), ConvertPtr to recover
+    // the C++ pointer, then copy.  release_ownership consumes the val.
+    Printf(out, "([&](){ emscripten::val __r = (%s); "
+                "std::vector<casadi::DM> __v; "
+                "size_t __n = __r[\"length\"].as<size_t>(); "
+                "for (size_t __i = 0; __i < __n; ++__i) { "
+                "emscripten::val __it = __r[__i]; "
+                "EM_VAL __h = __it.release_ownership(); "
+                "void *__p = 0; "
+                "(void)SWIG_WASMJS_ConvertPtr(__h, &__p, 0, 0); "
+                "if (__p) __v.push_back(*static_cast<casadi::DM*>(__p)); "
+                "} return __v; })()",
+                js_expr);
+  } else {
+    Printf(out, "/* unsupported directorout: %s */ %s()", s, s);
+  }
+  Delete(s);
+}
+
+int WASM_JS::classDirectorMethod(Node *n, Node *parent, String *super) {
+  (void)super;
+  String *name = Getattr(n, "name");
+  String *classname = Getattr(parent, "sym:name");
+  SwigType *returntype = Getattr(n, "type");
+  ParmList *l = Getattr(n, "parms");
+  String *decl = Getattr(n, "decl");
+  String *storage = Getattr(n, "storage");
+  String *value = Getattr(n, "value");
+  bool pure_virtual = (Cmp(storage, "virtual") == 0) && (value && Cmp(value, "0") == 0);
+  bool is_void = (Cmp(returntype, "void") == 0);
+
+  // Bail out for unsupported return / parm types.  C++ virtual dispatch
+  // for those methods falls through to the base class -- no JS override.
+  if (!wasmjs_director_type_supported(returntype)) {
+    return SWIG_OK;
+  }
+  for (Parm *p = l; p; p = nextSibling(p)) {
+    if (!wasmjs_director_type_supported(Getattr(p, "type"))) {
+      return SWIG_OK;
+    }
+  }
+
+  // Build the override signature.  Use Swig_method_decl with the
+  // qualified name "SwigDirector_<C>::<name>" for the impl, and the
+  // unqualified name for the header decl.
+  SwigType *rtype = Getattr(n, "conversion_operator") ? 0 : Getattr(n, "classDirectorMethods:type");
+  String *pclassname = NewStringf("SwigDirector_%s", classname);
+  String *qualname  = NewStringf("%s::%s", pclassname, name);
+  String *impl_sig  = Swig_method_decl(rtype, decl, qualname, l, 0);
+  String *hdr_sig   = Swig_method_decl(rtype, decl, name, l, 1);
+  bool is_const = SwigType_isconst(decl);
+
+  // Header decl inside the SwigDirector_<C> class body.
+  Printf(f_directors_h, "    virtual %s;\n", hdr_sig);
+
+  // Implementation: dispatch to JS if subclass overrides, else fall through.
+  Wrapper *w = NewWrapper();
+  Printf(w->def, "%s%s {\n", impl_sig, is_const ? "" : "");
+
+  Printf(w->code,
+    "  emscripten::val __js_self = this->swig_get_self();\n"
+    "  bool __overridden = false;\n"
+    "  if (!__js_self.isUndefined() && !__js_self.isNull()) {\n"
+    "    emscripten::val __proto = emscripten::val::global(\"Object\")"
+    ".call<emscripten::val>(\"getPrototypeOf\", __js_self);\n"
+    "    emscripten::val __base = emscripten::val::module_property(\"__base_proto_%s\");\n"
+    "    while (!__proto.isUndefined() && !__proto.isNull()) {\n"
+    "      if (!__base.isUndefined() && __proto.strictlyEquals(__base)) break;\n"
+    "      if (__proto.call<emscripten::val>(\"hasOwnProperty\", emscripten::val(\"%s\")).as<bool>()) { __overridden = true; break; }\n"
+    "      __proto = emscripten::val::global(\"Object\")"
+    ".call<emscripten::val>(\"getPrototypeOf\", __proto);\n"
+    "    }\n"
+    "  }\n",
+    classname, name);
+
+  Printf(w->code, "  if (!__overridden) {\n");
+  if (pure_virtual) {
+    Printf(w->code,
+      "    Swig::DirectorPureVirtualException::raise(\"%s::%s\");\n",
+      classname, name);
+    if (!is_void) Printf(w->code, "    return %s();\n", SwigType_str(returntype, 0));
+  } else {
+    if (is_void) {
+      Printf(w->code, "    %s::%s(", Getattr(parent, "name"), name);
+    } else {
+      Printf(w->code, "    return %s::%s(", Getattr(parent, "name"), name);
+    }
+    int comma = 0;
+    for (Parm *p = l; p; p = nextSibling(p)) {
+      // After Swig_method_decl above, each parm's "name" is set
+      // (source name or "argN" fallback).  Use that for the body.
+      String *pname = Getattr(p, "name");
+      if (!pname || Len(pname) == 0) continue;
+      if (comma) Printf(w->code, ", ");
+      Printf(w->code, "%s", pname);
+      comma = 1;
+    }
+    Printf(w->code, ");\n");
+    if (is_void) Printf(w->code, "    return;\n");
+  }
+  Printf(w->code, "  }\n");
+
+  // Build the JS call.  Each parm becomes one element in a JS args array.
+  Printf(w->code, "  try {\n");
+  Printf(w->code, "    emscripten::val __args = emscripten::val::array();\n");
+  for (Parm *p = l; p; p = nextSibling(p)) {
+    String *pname = Getattr(p, "name");
+    if (!pname || Len(pname) == 0) continue;
+    SwigType *pt = Getattr(p, "type");
+    String *push_expr = NewString("");
+    wasmjs_emit_cpp_to_val(push_expr, pt, Char(pname));
+    Printf(w->code, "    __args.call<void>(\"push\", %s);\n", push_expr);
+    Delete(push_expr);
+  }
+  Printf(w->code,
+    "    emscripten::val __ret = __js_self.call<emscripten::val>(\"%s\", __args);\n",
+    name);
+  if (is_void) {
+    Printf(w->code, "    (void)__ret;\n");
+    Printf(w->code, "    return;\n");
+  } else {
+    String *conv = NewString("");
+    wasmjs_emit_val_to_cpp(conv, returntype, "__ret");
+    Printf(w->code, "    return %s;\n", conv);
+    Delete(conv);
+  }
+  Printf(w->code, "  } catch (const std::exception &__e) {\n");
+  Printf(w->code, "    throw casadi::CasadiException(std::string(\"JS director: \") + __e.what());\n");
+  Printf(w->code, "  }\n");
+
+  Printf(w->code, "}\n\n");
+  Wrapper_print(w, f_directors);
+  DelWrapper(w);
+
+  // Remember that this class is director-enabled, so classHandler /
+  // top() can emit the C-linkage ctor wrapper and the JS-side shim.
+  if (!director_classes) director_classes = NewHash();
+  Setattr(director_classes, Getattr(parent, "name"), "1");
+
+  Delete(impl_sig);
+  Delete(hdr_sig);
+  Delete(qualname);
+  Delete(pclassname);
+  return SWIG_OK;
+}
+
 // ============================ main / top ====================================
 
 void WASM_JS::main(int argc, char *argv[]) {
@@ -1405,6 +2034,21 @@ void WASM_JS::main(int argc, char *argv[]) {
 int WASM_JS::top(Node *n) {
   String *module_name = Getattr(n, "name");
   String *outfile = Getattr(n, "outfile");
+
+  /* Phase 4.3: directorLanguage() is on in the ctor; flip
+     allow_directors() per the module's `directors=1` option.  Without
+     this, the AST's `%feature("director") C` blocks parse but emit no
+     SwigDirector_<C> classes. */
+  Node *optionsNode = Getattr(n, "options");
+  if (optionsNode && Getattr(optionsNode, "directors")) {
+    allow_directors();
+  }
+  /* When directors are enabled, splice the wasm-js director runtime
+     (Swig::Director base + exception classes) into f_cpp_runtime so
+     SwigDirector_<C> bodies compile.  Mirrors matlab.cxx:459 pattern.
+     f_cpp_runtime isn't allocated until below; insert into a temp
+     buffer first, then `Append`. */
+  bool emit_director_runtime = Swig_directors_enabled();
 
   f_out_cpp = NewFile(outfile, "w", SWIG_output_files());
   if (!f_out_cpp) { FileErrorDisplay(outfile); Exit(EXIT_FAILURE); }
@@ -1454,9 +2098,25 @@ int WASM_JS::top(Node *n) {
   f_cpp_header   = NewString("");
   f_cpp_wrappers = NewString("");
   f_cpp_init     = NewString("");
+  f_directors    = NewString("");
+  f_directors_h  = NewString("");
   f_js_pre       = NewString("");
   f_js_classes   = NewString("");
   f_js_module    = NewString("");
+  f_js_user      = NewString("");
+  /* "js" slot: user .i files do `%insert("js") %{ ... %}` to patch the
+     SWIG-emitted JS classes (e.g. extend a method to accept more arg
+     shapes).  Emitted between f_js_classes and the module return at the
+     end of top(). */
+  Swig_register_filebyname("js", f_js_user);
+
+  /* Splice Lib/wasm_js/director.swg into f_cpp_runtime so generated
+     SwigDirector_<C> classes can reference Swig::Director.  Done
+     after f_cpp_runtime is allocated and before the SWIG core fills
+     it via %insert(runtime). */
+  if (emit_director_runtime) {
+    Swig_insert_file("director.swg", f_cpp_runtime);
+  }
 
   /* Standard SWIG file-slot wiring (matches matlab.cxx ordering).
      "runtime" receives swigrun.swg + wasm_jsrun.swg via %insert(runtime)
@@ -1471,6 +2131,13 @@ int WASM_JS::top(Node *n) {
   Swig_register_filebyname("wrapper", f_cpp_wrappers);
   Swig_register_filebyname("init",    f_cpp_init);
   Swig_register_filebyname("begin",   f_cpp_runtime);
+  /* Phase 4.3: director file slots.  Without these, the base
+     Language::classDirector{Destructor,Init,End} hooks Printf to a
+     NULL FILE* (Swig_filebyname returns 0) and segfault.  Even when
+     wasm_js itself doesn't override classDirectorMethod, the bare
+     destructor / type-table emission goes through these slots. */
+  Swig_register_filebyname("director",   f_directors);
+  Swig_register_filebyname("director_h", f_directors_h);
 
   /* Always-on runtime exports: malloc/free for JS-side buffer alloc,
      and the SWIG_fail error-readback pair (defined in wasm_jsrun.swg).
@@ -1588,6 +2255,46 @@ int WASM_JS::top(Node *n) {
 
   Language::top(n);
 
+  /* Phase 4.3: expose each director class's prototype as a Module
+     property so the SwigDirector_<C> override's "is method overridden?"
+     check (in classDirectorMethod) has a base-prototype reference to
+     compare against during the walk-up-the-prototype-chain. */
+  if (director_classes) {
+    Iterator dit = First(director_classes);
+    while (dit.key) {
+      String *cpp_cn = (String *)dit.key;
+      String *js_cn = (String *)Getattr(cpp_to_js_class, cpp_cn);
+      if (js_cn) {
+        Printf(f_js_classes,
+          "  M.__base_proto_%s = %s.prototype;\n", js_cn, js_cn);
+      }
+      dit = Next(dit);
+    }
+  }
+
+  /* Phase 4.3 directorin: expose `M.__wrap_<C> = (ptr) => new <C>(
+     __PRIVATE_CTOR, ptr)` for every class with a wrappable proxy.
+     The C++-side directorin emitter calls these to wrap raw `_ptr`
+     values into full JS proxy instances before passing to the user's
+     director method.  Without this, args[0].method() yields
+     "method is not a function" because args[0] is a plain {_ptr:N}
+     object, not a class instance with prototype methods.
+
+     Currently only the leaf casadi value classes need this for the
+     supported directorin types (std::vector<DM> for Callback::eval). */
+  if (cpp_to_js_class) {
+    Iterator cit = First(cpp_to_js_class);
+    while (cit.key) {
+      String *js_cn = (String *)cit.item;
+      if (js_cn && Strncmp(js_cn, "__dummy_", 8) != 0) {
+        Printf(f_js_classes,
+          "  M.__wrap_%s = (p) => new %s(__PRIVATE_CTOR, p);\n",
+          js_cn, js_cn);
+      }
+      cit = Next(cit);
+    }
+  }
+
   /* Emit free-function dispatchers from global_overloads.  For each
      jsname with multiple overloads, pick at runtime by first-arg JS
      class name (e.g. MXVector -> the MX overload).  Single-overload
@@ -1612,28 +2319,15 @@ int WASM_JS::top(Node *n) {
           String *arg0c = (String *)Getattr(e, "arg0_class");
           String *jsargs_e = (String *)Getattr(e, "jsargs");
           String *body  = (String *)Getattr(e, "body");
+          /* Gate by both args.length and the arg0 class probe so the
+             truncated-arity phantom entries (default-arg fill-ins)
+             don't all match the full-arity probe and short-circuit. */
+          String *ar = (String *)Getattr(e, "arity");
           if (Len(arg0c) > 0) {
-            /* O(1) vector check via is_vector_jsname inverted hash. */
-            bool is_vec = is_vector_jsname && Getattr(is_vector_jsname, arg0c) != 0;
-            String *elem_class = 0;
-            if (is_vec) {
-              /* Heuristic: vectors registered via %wasm_vec(T, NAME) get a
-                 NAME of the form "<ElemClass>Vector".  Strip the suffix to
-                 recover the element class name.  TODO(plan Phase 4+):
-                 store the element class name explicitly at registration
-                 time so we don't depend on this naming convention. */
-              int al = Len(arg0c);
-              if (al > 6 && strcmp(Char(arg0c) + al - 6, "Vector") == 0) {
-                elem_class = NewStringWithSize(Char(arg0c), al - 6);
-              }
-            }
-            String *cond;
-            if (is_vec && elem_class) {
-              cond = NewStringf("__can_vec(args[0], '%s', '%s')", Char(elem_class), arg0c);
-              Delete(elem_class);
-            } else {
-              cond = NewStringf("__can(args[0], '%s')", arg0c);
-            }
+            register_probe(arg0c);
+            String *cond = NewStringf(
+                "args.length === %s && M._swig_can_%s(__unwrap(args[0]))",
+                ar ? Char(ar) : "0", arg0c);
             Printf(f_js_module,
               "      if (%s) {\n"
               "        const [%s] = args;\n"
@@ -1642,13 +2336,17 @@ int WASM_JS::top(Node *n) {
               cond, jsargs_e, body);
             Delete(cond);
           } else {
-            /* Fallback overload -- accepts any arg shape.  Place last. */
+            /* Fallback overload -- still arity-gated so truncated
+               entries don't fall through to wrong overloads. */
+            String *cond = NewStringf("args.length === %s",
+                ar ? Char(ar) : "0");
             Printf(f_js_module,
-              "      {\n"
+              "      if (%s) {\n"
               "        const [%s] = args;\n"
               "%s"
               "      }\n",
-              jsargs_e, body);
+              cond, jsargs_e, body);
+            Delete(cond);
           }
         }
         Printf(f_js_module,
@@ -1660,15 +2358,77 @@ int WASM_JS::top(Node *n) {
     }
   }
 
-  /* Phase 3 deferred: probe-based dispatch needs a `_swig_class` tag on
-     every JS proxy first (so SWIG_WASMJS_ConvertPtr can validate type
-     identity, not just extract `_ptr`).  Without that, the generic
-     to_ptr<M> fallback accepts any proxy as any type and overload
-     selection breaks.  See PHASE0_AUDIT.md for the design context. */
-
-  /* Emit the SWIG type table. f_cpp_wrappers is passed as the scope
-     context for SwigType_emit_type_table (matlab pattern, line 470). */
+  /* Emit the SWIG type table BEFORE the probe wrappers so the probe
+     wrappers can reference the static swig_type_info symbols directly
+     (the type table emits them with `static` linkage; forward-declaring
+     via `extern` would conflict).  f_cpp_wrappers is passed as the
+     scope context for SwigType_emit_type_table. */
   SwigType_emit_type_table(f_cpp_runtime, f_cpp_wrappers);
+
+  /* Phase 3.3: emit per-class `swig_can_<Class>` probe wrappers for
+     every class referenced by a dispatcher.  Each first does a strict
+     SWIG_ConvertPtr against the class's swig_type_info pointer (with
+     Phase 3.2 type-identity validation in SWIG_WASMJS_ConvertPtr the
+     cast chain accepts subclasses), then falls back to can_convert<T>
+     for fuzzy coercion (array/Dict/scalar paths). */
+  emit_probe_wrappers();
+
+  /* Phase 3.2: cast-chain init.  Forward-declared in wasm_jsrun.swg;
+     defined here, after swig_type_initial / swig_cast_initial are
+     declared by SwigType_emit_type_table.  We don't call
+     SWIG_InitializeModule (no multi-module support, no sort/hash
+     needed for our linear cast-chain walk), so the minimal wire-up
+     suffices: point each type's `cast` at its initial cast-info
+     array. */
+  Printf(f_cpp_wrappers,
+    "\n/* Phase 3.2: link cast chains so SWIG_WASMJS_ConvertPtr can\n"
+    "   validate type identity via the static cast tables, AND\n"
+    "   populate `swig_types[]` so the SWIGTYPE_p_<X> macros (which\n"
+    "   index `swig_types[i]`) resolve to non-null type-info pointers.\n"
+    "   Iterate by swig_module.size -- the static arrays are NOT\n"
+    "   NULL-terminated, only the size field is authoritative.\n"
+    "\n"
+    "   Runs eagerly at program startup via a static constructor\n"
+    "   object: `SWIGTYPE_p_<X>` is evaluated at the wrapper call site\n"
+    "   (an `swig_types[i]` array access), so a lazy first-ConvertPtr\n"
+    "   init would be too late -- the caller already read the slot.\n"
+    "   Static-init order between the type-info tables (constant init)\n"
+    "   and our constructor (dynamic init) is well-defined: constant\n"
+    "   init runs first, so the table data is ready by the time the\n"
+    "   constructor fires. */\n"
+    "/* Phase 4.3: separate sorted type-info array for SWIG_TypeQuery's\n"
+    "   binary search.  CANNOT sort swig_types[] in place: the\n"
+    "   SWIGTYPE_p_<X> macros hard-code indices into swig_types, so\n"
+    "   shuffling would break every wrapper.  Same size as swig_types. */\n"
+    "static swig_type_info *swig_types_sorted[sizeof(swig_types)/sizeof(swig_types[0])];\n"
+    "void SWIG_WASMJS_init_cast_chains() {\n"
+    "  for (size_t i = 0; i < swig_module.size; ++i) {\n"
+    "    if (swig_type_initial[i] && swig_cast_initial[i] && swig_cast_initial[i]->type) {\n"
+    "      swig_type_initial[i]->cast = swig_cast_initial[i];\n"
+    "    }\n"
+    "    swig_types[i] = swig_type_initial[i];\n"
+    "    swig_types_sorted[i] = swig_type_initial[i];\n"
+    "  }\n"
+    "  /* Insertion sort the COPY by name (n=61, runs once). */\n"
+    "  for (size_t i = 1; i < swig_module.size; ++i) {\n"
+    "    swig_type_info *t = swig_types_sorted[i];\n"
+    "    size_t j = i;\n"
+    "    while (j > 0 && swig_types_sorted[j-1]->name && t->name\n"
+    "           && strcmp(swig_types_sorted[j-1]->name, t->name) > 0) {\n"
+    "      swig_types_sorted[j] = swig_types_sorted[j-1];\n"
+    "      --j;\n"
+    "    }\n"
+    "    swig_types_sorted[j] = t;\n"
+    "  }\n"
+    "  /* Wire the sorted view into swig_module so SWIG_TypeQuery works. */\n"
+    "  swig_module.types = swig_types_sorted;\n"
+    "  swig_module.type_initial = swig_type_initial;\n"
+    "  swig_module.cast_initial = swig_cast_initial;\n"
+    "  swig_module.next = &swig_module;  /* self-loop, do/while termination */\n"
+    "}\n"
+    "static struct SWIGWasmJSInit { SWIGWasmJSInit() {\n"
+    "  SWIG_WASMJS_init_cast_chains();\n"
+    "} } _swig_wasmjs_init;\n");
 
   // C++ output.  Runtime block (swigrun.swg + wasm-js runtime + type
   // table) is dumped first, BEFORE the extern "C" wrapper section, so
@@ -1676,6 +2436,10 @@ int WASM_JS::top(Node *n) {
   // every wrapper.  The user %{...%} header block follows runtime so
   // user code can reference runtime APIs.  Wrappers live inside an
   // extern "C" block so emscripten exports get C linkage.
+  /* Director-class declarations + implementations live in C++ linkage
+     between the user header block and the extern "C" wrappers, so the
+     SwigDirector_<C> classes are visible to any per-class glue but the
+     EMSCRIPTEN_KEEPALIVE wrappers themselves stay C-linkage. */
   Printf(f_out_cpp,
     "// Generated by SWIG -wasm-js (NO Embind).  Do not edit.\n\n"
     "#include <emscripten.h>\n"
@@ -1684,8 +2448,10 @@ int WASM_JS::top(Node *n) {
     "#include <string>\n"
     "%s\n"
     "%s\n"
+    "%s\n"
+    "%s\n"
     "extern \"C\" {\n\n%s\n} // extern \"C\"\n",
-    f_cpp_runtime, f_cpp_header, f_cpp_wrappers);
+    f_cpp_runtime, f_cpp_header, f_directors_h, f_directors, f_cpp_wrappers);
 
   // JS output -- strip directory + extension to get sibling name for require()
   String *base = NewString(outfile);
@@ -1709,16 +2475,30 @@ int WASM_JS::top(Node *n) {
     "//     -s EXPORTED_RUNTIME_METHODS='[\"UTF8ToString\"]' \\\n"
     "//     -s EXPORTED_FUNCTIONS=@<name>.exports \\\n"
     "//     -o <name>_wasm.js\n\n"
-    "const createWasm = require('./%s_wasm.js');\n\n"
+    "const createWasm = require('./%s_wasm.js');\n"
+    "const __path = require('path');\n\n"
     "module.exports = async function create%s() {\n"
-    "  const M = await createWasm();\n\n"
+    "  /* Resolve .wasm / .data file lookups relative to THIS file rather\n"
+    "     than process.cwd(), so the module is callable from any cwd.\n"
+    "     Critical for the MAIN_MODULE build where --preload-file plugins\n"
+    "     ship as a sibling .data file. */\n"
+    "  const M = await createWasm({\n"
+    "    locateFile: (p, prefix) => __path.join(__dirname, p),\n"
+    "  });\n"
+    "  /* Optional plugin registration entry point.  Defined when the\n"
+    "     module was linked with statically-bundled plugins.  Absent in\n"
+    "     the standard MAIN_MODULE build, which loads plugins via the\n"
+    "     dlopen path against preloaded SIDE_MODULE .so files. */\n"
+    "  if (typeof M._swig_wasm_load_plugins === 'function') M._swig_wasm_load_plugins();\n\n"
     "%s"
     "%s"
-    "  return {\n"
+    "  const __m = {\n"
     "%s"
     "  };\n"
+    "%s"
+    "  return __m;\n"
     "};\n",
-    base, module_name, f_js_pre, f_js_classes, f_js_module);
+    base, module_name, f_js_pre, f_js_classes, f_js_module, f_js_user);
 
   /* TypeScript stubs: dump module body to .d.ts and close.  Do NOT
      emit the stubs_preamble slot: it's populated by python-syntax
@@ -1747,9 +2527,12 @@ int WASM_JS::top(Node *n) {
   Delete(f_cpp_header);
   Delete(f_cpp_wrappers);
   Delete(f_cpp_init);
+  Delete(f_directors);
+  Delete(f_directors_h);
   Delete(f_js_pre);
   Delete(f_js_classes);
   Delete(f_js_module);
+  Delete(f_js_user);
   Delete(f_out_cpp);
   Delete(f_out_js);
   Delete(f_out_exports);
@@ -1849,6 +2632,35 @@ int WASM_JS::classHandler(Node *n) {
       Printf(ctor_js,
         "      if (args[0] === __PRIVATE_CTOR) { this._ptr = args[1]; return; }\n");
     }
+    /* Phase 4.3: director subclass detection.  If a JS user subclasses
+       a director-marked class (e.g. `class MyCB extends Callback`), we
+       construct a SwigDirector_<C> on the C++ side and pass `this` JS
+       proxy down as an EM_VAL.  When new.target === <C> (no subclass),
+       fall through to the normal ctor dispatch below. */
+    if (director_classes && Getattr(director_classes, cname)) {
+      if (class_has_base) {
+        Printf(ctor_js,
+          "      if (new.target !== %s) {\n"
+          "        super(__PRIVATE_CTOR, 0);\n"
+          "        const __h = M.__swig_take_handle(this);\n"
+          "        const __dptr = M._swig_new_SwigDirector_%s(__h);\n"
+          "        this._ptr = __dptr;\n"
+          "        __fr_%s.register(this, __dptr, this);\n"
+          "        return;\n"
+          "      }\n",
+          class_jsname, class_jsname, mangle(cname));
+      } else {
+        Printf(ctor_js,
+          "      if (new.target !== %s) {\n"
+          "        const __h = M.__swig_take_handle(this);\n"
+          "        const __dptr = M._swig_new_SwigDirector_%s(__h);\n"
+          "        this._ptr = __dptr;\n"
+          "        __fr_%s.register(this, __dptr, this);\n"
+          "        return;\n"
+          "      }\n",
+          class_jsname, class_jsname, mangle(cname));
+      }
+    }
     Printf(ctor_js, "      let __ptr;\n      switch (args.length) {\n");
     /* Group overloads by arity, emit one `case N:` per arity with
        sequential type-matching tries. */
@@ -1890,22 +2702,11 @@ int WASM_JS::classHandler(Node *n) {
             String *idx = (String *)Getitem(idx_list, k);
             String *cls = (String *)Getitem(cls_list, k);
             if (k > 0) Printv(cond, " && ", NIL);
-            /* O(1) vector check via is_vector_jsname (same pattern as
-               the arg0 dispatcher above). */
-            bool is_vec = is_vector_jsname && Getattr(is_vector_jsname, cls) != 0;
-            String *elem_class = 0;
-            if (is_vec) {
-              int cl = Len(cls);
-              if (cl > 6 && strcmp(Char(cls) + cl - 6, "Vector") == 0) {
-                elem_class = NewStringWithSize(Char(cls), cl - 6);
-              }
-            }
-            if (is_vec && elem_class) {
-              Printf(cond, "__can_vec(args[%s], '%s', '%s')", idx, elem_class, cls);
-              Delete(elem_class);
-            } else {
-              Printf(cond, "__can(args[%s], '%s')", idx, cls);
-            }
+            /* Phase 3.3: wasm-side probe per class-typed parm (replaces
+               JS-side __can / __can_vec string compares).  See the
+               arg0-dispatcher block above for design rationale. */
+            register_probe(cls);
+            Printf(cond, "M._swig_can_%s(__unwrap(args[%s]))", cls, idx);
           }
           Printf(ctor_js,
             "          if (%s) { __ptr = __chk(M._%s(%s)); break; }\n",
@@ -1918,9 +2719,21 @@ int WASM_JS::classHandler(Node *n) {
       if (fallback) {
         String *sw = (String *)Getattr(fallback, "swig_name");
         String *call_args = (String *)Getattr(fallback, "call_args_js");
-        Printf(ctor_js,
-          "          __ptr = __chk(M._%s(%s)); break;\n",
-          sw, call_args ? Char(call_args) : "");
+        String *prim = (String *)Getattr(fallback, "prim_checks");
+        if (prim && Len(prim) > 0) {
+          /* Gate the fallback on JS-typeof checks so e.g. MX("hello")
+             doesn't silently coerce a string to NaN via the
+             MX(double) wrapper. */
+          Printf(ctor_js,
+            "          if (%s) { __ptr = __chk(M._%s(%s)); break; }\n"
+            "          throw new TypeError(`%s: arg-type mismatch at length %s`);\n",
+            Char(prim), sw, call_args ? Char(call_args) : "",
+            class_jsname, arity_key);
+        } else {
+          Printf(ctor_js,
+            "          __ptr = __chk(M._%s(%s)); break;\n",
+            sw, call_args ? Char(call_args) : "");
+        }
       } else {
         Printf(ctor_js,
           "          throw new Error(`%s: no ctor matches args at length %s`);\n",
@@ -1949,6 +2762,145 @@ int WASM_JS::classHandler(Node *n) {
     Delete(ctor_js); Delete(cmangle);
   }
 
+  /* Emit member-method dispatchers (same shape as static; without
+     `static` keyword).  Lets Sparsity.row() (no arg, returns
+     vector) and Sparsity.row(k) (k-th entry) coexist via
+     args.length dispatch. */
+  if (member_overloads) {
+    String *member_js = NewString("");
+    Iterator mit = First(member_overloads);
+    while (mit.key) {
+      String *key = (String *)mit.key;
+      const char *ks = Char(key);
+      const char *p = strstr(ks, "::");
+      if (p) {
+        size_t plen = p - ks;
+        if (plen == (size_t)Len(class_jsname)
+            && strncmp(ks, Char(class_jsname), plen) == 0) {
+          List *lst = (List *)mit.item;
+          const char *jsname = p + 2;
+          int nover = Len(lst);
+          if (nover == 1) {
+            Hash *e = (Hash *)Getitem(lst, 0);
+            String *ja = (String *)Getattr(e, "jsargs");
+            String *bd = (String *)Getattr(e, "js_body");
+            Printf(member_js,
+              "    %s(%s) {\n%s    }\n",
+              jsname, ja ? Char(ja) : "", bd ? Char(bd) : "");
+          } else {
+            Printf(member_js, "    %s(...args) {\n", jsname);
+            Printf(member_js, "      switch (args.length) {\n");
+            Hash *byArity = NewHash();
+            for (int i = 0; i < nover; ++i) {
+              Hash *e = (Hash *)Getitem(lst, i);
+              String *ar = (String *)Getattr(e, "arity");
+              if (!Getattr(byArity, ar)) Setattr(byArity, ar, e);
+            }
+            Iterator ait = First(byArity);
+            while (ait.key) {
+              String *ar = (String *)ait.key;
+              Hash *e = (Hash *)ait.item;
+              String *ja = (String *)Getattr(e, "jsargs");
+              String *bd = (String *)Getattr(e, "js_body");
+              Printf(member_js,
+                "        case %s: {\n"
+                "          const [%s] = args;\n"
+                "%s"
+                "        }\n",
+                ar, ja ? Char(ja) : "", bd ? Char(bd) : "");
+              ait = Next(ait);
+            }
+            Delete(byArity);
+            Printf(member_js,
+              "        default: throw new Error(`%s.%s: no overload for ${args.length} args`);\n"
+              "      }\n"
+              "    }\n",
+              class_jsname, jsname);
+          }
+        }
+      }
+      mit = Next(mit);
+    }
+    /* Append member methods after static (static_js is prepended
+       below). */
+    Printv(class_js_body, member_js, NIL);
+    Delete(member_js);
+  }
+
+  /* Emit static-method dispatchers for this class.  Each (class, jsname)
+     entry in static_overloads collected by staticmemberfunctionHandler
+     is rendered into one `static jsname(...args)` body that switches on
+     args.length.  Default-arg phantom overloads (sym(name),
+     sym(name, n), sym(name, n, m)) each get their own arity case.
+     If only one arity exists, emit a flat call without the switch. */
+  if (static_overloads) {
+    String *static_js = NewString("");
+    Iterator sit = First(static_overloads);
+    while (sit.key) {
+      String *key = (String *)sit.key;
+      /* Filter to this class -- keys are "<class_jsname>::<method>". */
+      const char *ks = Char(key);
+      size_t plen = 0;
+      const char *p = strstr(ks, "::");
+      if (p) {
+        plen = p - ks;
+        if (plen == (size_t)Len(class_jsname)
+            && strncmp(ks, Char(class_jsname), plen) == 0) {
+          List *lst = (List *)sit.item;
+          const char *jsname = p + 2;
+          int nover = Len(lst);
+          if (nover == 1) {
+            Hash *e = (Hash *)Getitem(lst, 0);
+            String *ja = (String *)Getattr(e, "jsargs");
+            String *bd = (String *)Getattr(e, "js_body");
+            Printf(static_js,
+              "    static %s(%s) {\n%s    }\n",
+              jsname, ja ? Char(ja) : "", bd ? Char(bd) : "");
+          } else {
+            /* Multi-arity: switch on args.length. */
+            Printf(static_js, "    static %s(...args) {\n", jsname);
+            Printf(static_js, "      switch (args.length) {\n");
+            /* Group by arity. */
+            Hash *byArity = NewHash();
+            for (int i = 0; i < nover; ++i) {
+              Hash *e = (Hash *)Getitem(lst, i);
+              String *ar = (String *)Getattr(e, "arity");
+              if (!Getattr(byArity, ar)) Setattr(byArity, ar, e);
+            }
+            Iterator ait = First(byArity);
+            while (ait.key) {
+              String *ar = (String *)ait.key;
+              Hash *e = (Hash *)ait.item;
+              String *ja = (String *)Getattr(e, "jsargs");
+              String *bd = (String *)Getattr(e, "js_body");
+              Printf(static_js,
+                "        case %s: {\n"
+                "          const [%s] = args;\n"
+                "%s"
+                "        }\n",
+                ar, ja ? Char(ja) : "", bd ? Char(bd) : "");
+              ait = Next(ait);
+            }
+            Delete(byArity);
+            Printf(static_js,
+              "        default: throw new Error(`%s.%s: no overload for ${args.length} args`);\n"
+              "      }\n"
+              "    }\n",
+              class_jsname, jsname);
+          }
+        }
+      }
+      sit = Next(sit);
+    }
+    /* Prepend static methods to class_js_body. */
+    if (Len(static_js) > 0) {
+      String *nb = NewStringf("%s%s", static_js, class_js_body);
+      Delete(class_js_body);
+      class_js_body = nb;
+    }
+    Delete(static_js);
+  }
+
   Printf(f_cpp_wrappers,
     "// --- class %s (%s) ---\n%s\n",
     class_jsname, cname, class_cpp_section);
@@ -1973,6 +2925,21 @@ int WASM_JS::classHandler(Node *n) {
     "  const __fr_%s = new FinalizationRegistry(p => M._swig_%s_delete(p));\n"
     "  class %s%s {\n%s  }\n",
     cmangle, cmangle, class_jsname, base_clause, class_js_body);
+
+  // Phase 3.1: set the SWIG type tag on the prototype.  The tag matches
+  // the C++-side `swig_type_info::name` (e.g. `_p_casadi__MX`).  Used by
+  // SWIG_WASMJS_ConvertPtr to validate type identity against the
+  // expected `swig_type_info::cast` chain.
+  {
+    SwigType *ptr_t = Copy(t);
+    SwigType_add_pointer(ptr_t);
+    String *swig_tag = SwigType_manglestr(ptr_t);
+    Printf(f_js_classes,
+      "  %s.prototype._swig_type = '%s';\n",
+      class_jsname, swig_tag);
+    Delete(swig_tag);
+    Delete(ptr_t);
+  }
 
   // Multi-inheritance shim: pull non-first bases' static + prototype
   // methods into this class.  Effect for casadi: `SX.sym()` works
@@ -2024,18 +2991,13 @@ int WASM_JS::constructorHandler(Node *n) {
   ParmList *p = Getattr(n, "parms");
   int arity = parm_arity(p);
 
-  /* Skip the implicit copy-ctor (auto-generated by SWIG); recognise it
-     by `arity == 1 && parm type mentions our own class name`.  Don't
-     skip merely because the parm has a `::` namespace -- that's the
-     typical case for legit ctors taking foreign classes (e.g.
-     MX(const DM&)). */
+  /* Don't skip the implicit copy-ctor.  Phase 3.4: the JS dispatcher
+     needs a real MX(const MX&) wrapper so that `new M.MX(other_mx)`
+     routes through `swig_can_MX(args[0])` to the copy overload.  The
+     previous heuristic (skip when `arity == 1 && parm type mentions
+     own class name`) made `new M.MX(MX)` fall through to MX(double)
+     and corrupt. */
   bool skip = false;
-  if (arity == 1) {
-    SwigType *qt = Getattr(p, "type");
-    String *ts = SwigType_str(qt, 0);
-    if (Strstr(ts, class_cname)) skip = true;
-    Delete(ts);
-  }
 
   if (!skip) {
     String *cmangle = mangle(class_cname);
@@ -2081,6 +3043,11 @@ int WASM_JS::constructorHandler(Node *n) {
     int parm_idx = 0;
     String *dispatch_idxs = NewString("");
     String *dispatch_clss = NewString("");
+    /* Per-arg JS typeof-checks for PRIMITIVE parms.  Prevents the
+       arity-fallback overload from accepting non-numeric args (e.g.
+       `MX("hello")` silently routing to `MX(double)` -> NaN).  Empty
+       string when no primitive parms (or unknown types). */
+    String *prim_checks = NewString("");
     for (Parm *q = p; q; q = nextSibling(q), ++parm_idx) {
       if (is_in_numinputs0(q)) continue;
       SwigType *t = Getattr(q, "type");
@@ -2092,6 +3059,34 @@ int WASM_JS::constructorHandler(Node *n) {
           if (Len(dispatch_idxs) > 0) { Printv(dispatch_idxs, " ", NIL); Printv(dispatch_clss, " ", NIL); }
           Printf(dispatch_idxs, "%d", parm_idx);
           Printv(dispatch_clss, hit, NIL);
+        } else {
+          /* Primitive parm: emit a typeof check for the fallback case.
+             Strip cv/ref/ptr and resolve typedefs to identify the
+             underlying primitive. */
+          SwigType *ts = Copy(t);
+          SwigType *tres = SwigType_typedef_resolve_all(ts);
+          String *tstr = SwigType_str(tres ? tres : ts, 0);
+          const char *cs = Char(tstr);
+          const char *jscheck = 0;
+          if (strstr(cs, "double") || strstr(cs, "float")) {
+            jscheck = "(typeof args[%d] === 'number' || typeof args[%d] === 'bigint')";
+          } else if (strstr(cs, "int") || strstr(cs, "long") || strstr(cs, "short")) {
+            jscheck = "(typeof args[%d] === 'number' || typeof args[%d] === 'bigint')";
+          } else if (strstr(cs, "bool")) {
+            jscheck = "(typeof args[%d] === 'boolean' || typeof args[%d] === 'number')";
+          } else if (strstr(cs, "string") || strstr(cs, "char")) {
+            jscheck = "(typeof args[%d] === 'string')";
+          }
+          if (jscheck) {
+            if (Len(prim_checks) > 0) Printv(prim_checks, " && ", NIL);
+            /* The format string has %d twice -- printf with same arg
+               value substituted for both. */
+            char chk[256];
+            snprintf(chk, sizeof(chk), jscheck, parm_idx, parm_idx);
+            Printv(prim_checks, chk, NIL);
+          }
+          if (tres) Delete(tres);
+          Delete(tstr); Delete(ts);
         }
       }
     }
@@ -2101,6 +3096,8 @@ int WASM_JS::constructorHandler(Node *n) {
     } else {
       Delete(dispatch_idxs); Delete(dispatch_clss);
     }
+    if (Len(prim_checks) > 0) Setattr(entry, "prim_checks", prim_checks);
+    else Delete(prim_checks);
     /* Build per-arg conversion list so the ctor dispatcher can emit
        proper wasm-call arguments instead of blind `__unwrap_args(...)`.
        For each input parm: vector-typed -> `__unwrap(__arr_to_vec(args[i], V))`,
@@ -2125,6 +3122,103 @@ int WASM_JS::constructorHandler(Node *n) {
     }
     if (!ctor_overloads) ctor_overloads = NewList();
     Append(ctor_overloads, entry);
+
+    /* Default-arg phantom overloads (so `new M.Sparsity()` works when
+       the C++ ctor is `Sparsity(casadi_int dummy=0)`).  Register
+       additional entries at lower arities; each truncated entry's
+       call_args_js fills in defaults for the missing trailing args. */
+    int max_js_arity = parm_arity_js(p);
+    int first_def = first_default_arity(p);
+    /* Re-read dispatch_idxs/clss from the entry (the source-side
+       locals may have been freed by the Setattr-or-Delete branch). */
+    String *orig_idxs = (String *)Getattr(entry, "dispatch_idxs");
+    String *orig_clss = (String *)Getattr(entry, "dispatch_clss");
+    if (first_def >= 0 && first_def < max_js_arity) {
+      for (int trunc = first_def; trunc < max_js_arity; ++trunc) {
+        Hash *tentry = NewHash();
+        char tar[16]; snprintf(tar, sizeof(tar), "%d", trunc);
+        Setattr(tentry, "arity", NewString(tar));
+        Setattr(tentry, "swig_name", Copy(swig_name));
+        /* Class-typed parm dispatch checks: only apply to indices
+           below `trunc` (the missing ones are filled by defaults so
+           probing them is moot).  Build the filtered idxs/clss
+           strings. */
+        String *tidxs = NewString("");
+        String *tclss = NewString("");
+        if (orig_idxs && orig_clss) {
+          List *idx_list = Split(orig_idxs, ' ', -1);
+          List *cls_list = Split(orig_clss, ' ', -1);
+          for (int k = 0; k < Len(idx_list); ++k) {
+            int idx_n = atoi(Char((String*)Getitem(idx_list, k)));
+            if (idx_n < trunc) {
+              if (Len(tidxs) > 0) { Printv(tidxs, " ", NIL); Printv(tclss, " ", NIL); }
+              Printf(tidxs, "%d", idx_n);
+              Printv(tclss, (String*)Getitem(cls_list, k), NIL);
+            }
+          }
+          Delete(idx_list); Delete(cls_list);
+        }
+        if (Len(tidxs) > 0) {
+          Setattr(tentry, "dispatch_idxs", tidxs);
+          Setattr(tentry, "dispatch_clss", tclss);
+        } else { Delete(tidxs); Delete(tclss); }
+        /* Build a truncated call_args_js: real args[0..trunc-1] for
+           the present positions, then literal defaults for the rest. */
+        String *t_call_args = NewString("");
+        int pi = 0;
+        for (Parm *q2 = p; q2; q2 = nextSibling(q2)) {
+          if (is_in_numinputs0(q2)) continue;
+          if (Len(t_call_args) > 0) Printv(t_call_args, ", ", NIL);
+          if (pi < trunc) {
+            SwigType *t2 = Getattr(q2, "type");
+            if (String *vec_cls = vector_class_name(t2)) {
+              Printf(t_call_args, "__unwrap(__arr_to_vec(args[%d], %s))", pi, Char(vec_cls));
+            } else if (is_registered_class_type(t2)) {
+              Printf(t_call_args, "__unwrap(args[%d])", pi);
+            } else {
+              Printf(t_call_args, "args[%d]", pi);
+            }
+          } else {
+            /* Fill in C++ default as a JS literal.  Reuse the
+               build_defaults_prologue logic per parm. */
+            String *val = Getattr(q2, "value");
+            SwigType *t2 = Getattr(q2, "type");
+            SwigType *tres = t2 ? SwigType_typedef_resolve_all(t2) : 0;
+            String *ts = SwigType_str(tres ? tres : t2, 0);
+            const char *cs = ts ? Char(ts) : "";
+            bool emitted = false;
+            if (val && Len(val) > 0) {
+              const char *vs = Char(val);
+              bool looks_numeric = false;
+              { const char *q3 = vs; while (*q3 == ' ') ++q3;
+                if (*q3 == '-' || *q3 == '+') ++q3;
+                if (*q3 >= '0' && *q3 <= '9') looks_numeric = true; }
+              bool is_bool_kw = (strcmp(vs, "true") == 0 || strcmp(vs, "false") == 0);
+              bool is_string_lit = (vs[0] == '"');
+              if (is_bool_kw) { Printv(t_call_args, vs, NIL); emitted = true; }
+              else if (looks_numeric) {
+                if (strstr(cs, "int") || strstr(cs, "long") || strstr(cs, "short")) {
+                  Printf(t_call_args, "%sn", vs);
+                } else { Printv(t_call_args, vs, NIL); }
+                emitted = true;
+              } else if (is_string_lit) {
+                Printv(t_call_args, vs, NIL); emitted = true;
+              }
+            }
+            if (!emitted) Printv(t_call_args, "undefined", NIL);
+            if (ts) Delete(ts);
+            if (tres) Delete(tres);
+          }
+          ++pi;
+        }
+        Setattr(tentry, "call_args_js", t_call_args);
+        /* No prim_checks for truncated entries -- the missing args are
+           filled, not user-supplied.  Could add prim checks for the
+           PRESENT primitive args; for now omit (the full-arity entry
+           already has them). */
+        Append(ctor_overloads, tentry);
+      }
+    }
 
     Delete(swig_name); Delete(decls); Delete(args); Delete(cmangle);
     Delete(prologue); Delete(frees);
@@ -2192,13 +3286,27 @@ int WASM_JS::memberfunctionHandler(Node *n) {
      any other class parm (Phase 1.2 — closes the val-convention bypass).
      Extract the C++ pointer via SWIG_ConvertPtr before invoking the
      regular body.  SWIG_fail in the prologue routes to the body's
-     `fail:` label (emitted by cpp_call_body). */
+     `fail:` label (emitted by cpp_call_body).
+
+     Phase 4.3: pass the declared self-type's SWIGTYPE descriptor to
+     SWIG_ConvertPtr.  This lets the cast-chain converter apply C++
+     inheritance offset adjustment when the proxy's actual type is a
+     derived class with a different layout (e.g. SwigDirector_Callback
+     vs declared Function*).  Without it, multi-inheritance hierarchies
+     where an intermediate base is non-polymorphic silently misroute. */
+  SwigType *self_ptr_t = NewString(class_cname);
+  SwigType_add_pointer(self_ptr_t);
+  String *self_mangled = SwigType_manglestr(self_ptr_t);
+  /* Use SWIG_TypeQuery so types not present in the swig_types[] table
+     (e.g. unregistered std::vector instantiations like DoubleVector)
+     fall back to NULL gracefully -- same behavior as pre-Phase-4.3,
+     no cast-chain conversion but the wrapper still works. */
   Printf(class_cpp_section,
     "EMSCRIPTEN_KEEPALIVE %s %s(EM_VAL self_handle%s%s) {\n"
     "  %s%s* self = 0;\n"
     "  {\n"
     "    void* _self_raw = 0;\n"
-    "    if (!SWIG_IsOK(SWIG_ConvertPtr(self_handle, &_self_raw, 0, 0))) "
+    "    if (!SWIG_IsOK(SWIG_ConvertPtr(self_handle, &_self_raw, SWIG_TypeQuery(\"%s\"), 0))) "
         "SWIG_exception_fail(SWIG_TypeError, \"self conversion failed\");\n"
     "    self = static_cast<%s%s*>(_self_raw);\n"
     "  }\n"
@@ -2206,22 +3314,37 @@ int WASM_JS::memberfunctionHandler(Node *n) {
     ret_t, swig_name,
     Len(decls) > 0 ? ", " : "", decls,
     self_q, class_cname,
+    self_mangled,
     self_q, class_cname,
     body);
+  Delete(self_ptr_t);
+  Delete(self_mangled);
   register_export(Char(swig_name));
 
   SwigType *eff_rt = effective_js_return_type(rt, p);
   /* JS-side: self also goes through __unwrap so the wasm call receives an
-     EM_VAL for `this`.  Symmetric with other class parms. */
-  if (!Getattr(member_names_seen, jsraw)) {
-    Setattr(member_names_seen, jsraw, "1");
-    String *js_body_str = emit_js_body(p, eff_rt ? eff_rt : rt, swig_name, "__unwrap(this)");
-    Printf(class_js_body,
-      "    %s(%s) {\n%s    }\n",
-      jsraw, jsargs, js_body_str);
-    Delete(js_body_str);
-    stub_emit_function(n, "  ", 1);
-  }
+     EM_VAL for `this`.  Symmetric with other class parms.  Deferred to
+     class-end so multiple overloads (and SWIG default-arg phantoms)
+     get a per-arity dispatcher. */
+  String *js_body_str = emit_js_body(p, eff_rt ? eff_rt : rt, swig_name, "__unwrap(this)");
+
+  Hash *entry = NewHash();
+  Setattr(entry, "swig_name", Copy(swig_name));
+  Setattr(entry, "jsargs", Copy(jsargs));
+  char ar_str[16]; snprintf(ar_str, sizeof(ar_str), "%d", parm_arity_js(p));
+  Setattr(entry, "arity", NewString(ar_str));
+  Setattr(entry, "js_body", js_body_str);
+
+  if (!member_overloads) member_overloads = NewHash();
+  String *key = NewStringf("%s::%s", class_jsname, jsraw);
+  List *lst = (List *)Getattr(member_overloads, key);
+  if (!lst) { lst = NewList(); Setattr(member_overloads, key, lst); }
+  Append(lst, entry);
+  Delete(key);
+
+  /* TS stub: emit per overload while f_stubs_class_body is the
+     active receiver. */
+  stub_emit_function(n, "  ", 1);
 
   Delete(swig_name); Delete(cmangle); Delete(self_q); Delete(jsraw);
   Delete(decls); Delete(args); Delete(jsargs);
@@ -2311,16 +3434,86 @@ int WASM_JS::staticmemberfunctionHandler(Node *n) {
     ret_t, swig_name, decls, body);
   register_export(Char(swig_name));
 
-  /* First-wins per (class, jsname) -- same convention as member methods. */
-  if (!Getattr(member_names_seen, jsname)) {
-    Setattr(member_names_seen, jsname, "1");
-    String *js_body = emit_js_body(p, rt, swig_name, "");
-    Printf(class_js_body,
-      "    static %s(%s) {\n%s    }\n",
-      jsname, jsargs, js_body);
-    Delete(js_body);
-    stub_emit_function(n, "  ", 2);  /* TS: `static name(...): T;` */
+  /* Collect all overloads per (class, jsname) so the dispatcher can
+     route by args.length (default-arg phantoms vs real overloads).
+     JS body emission is deferred to the end of classHandler; TS stub
+     emission stays here because f_stubs_class_body is only the
+     active receiver during Language::classHandler's child walk.
+     Build per-arity entries so e.g. MX.sym("x") dispatches to a
+     1-arg wrapper that fills in C++ defaults (nrow=1, ncol=1). */
+  /* Discover default values: SWIG sets `value` on parms with defaults
+     under compactdefaultargs (the C++ default expression as a
+     string).  Build a defaults block per truncation point. */
+  int max_arity = parm_arity_js(p);
+  /* Walk parms in JS-visible order (skipping numinputs=0 parms) and
+     find the index of the first consecutive-defaulted suffix.  Each
+     virtual truncation between that and max_arity becomes an extra
+     overload that fills in the missing args with their literal
+     defaults. */
+  int first_default_idx = -1;
+  {
+    int js_idx = 0;
+    for (Parm *q = p; q; q = nextSibling(q)) {
+      if (is_in_numinputs0(q)) continue;
+      String *v = Getattr(q, "value");
+      if (v && Len(v) > 0) {
+        if (first_default_idx == -1) first_default_idx = js_idx;
+      } else {
+        /* A non-defaulted parm appears after a defaulted one --
+           shouldn't happen with C++ default-arg semantics, but reset
+           to be safe. */
+        first_default_idx = -1;
+      }
+      ++js_idx;
+    }
   }
+
+  if (!static_overloads) static_overloads = NewHash();
+  String *key = NewStringf("%s::%s", class_jsname, jsname);
+  List *lst = (List *)Getattr(static_overloads, key);
+  if (!lst) { lst = NewList(); Setattr(static_overloads, key, lst); }
+
+  /* Emit one entry per virtual arity from `first_default_idx` up to
+     `max_arity` inclusive (max_arity is always emitted, and each
+     prefix where the suffix is all-defaulted becomes a phantom). */
+  int lo_arity = (first_default_idx >= 0) ? first_default_idx : max_arity;
+  for (int trunc = lo_arity; trunc <= max_arity; ++trunc) {
+    Hash *entry = NewHash();
+    Setattr(entry, "swig_name", Copy(swig_name));
+    char ar_str[16]; snprintf(ar_str, sizeof(ar_str), "%d", trunc);
+    Setattr(entry, "arity", NewString(ar_str));
+
+    /* Build a truncated jsargs list (only the present args) and a
+       defaults prologue (the missing trailing args, with their C++
+       defaults translated to JS literals).  Reuses the global
+       `build_defaults_prologue` helper for consistency. */
+    String *trunc_jsargs = NewString("");
+    int s = 0;
+    for (Parm *q = p; q; q = nextSibling(q)) {
+      if (is_in_numinputs0(q)) continue;
+      if (s < trunc) {
+        if (Len(trunc_jsargs) > 0) Printv(trunc_jsargs, ", ", NIL);
+        Printf(trunc_jsargs, "a%d", s);
+      }
+      ++s;
+    }
+    String *defaults_prologue = build_defaults_prologue(p, trunc);
+    Setattr(entry, "jsargs", trunc_jsargs);
+    String *body_full = emit_js_body(p, rt, swig_name, "");
+    String *body_with_defaults = NewStringf("%s%s",
+        Char(defaults_prologue), Char(body_full));
+    Setattr(entry, "js_body", body_with_defaults);
+    Delete(body_full); Delete(defaults_prologue);
+
+    Append(lst, entry);
+  }
+
+  Delete(key);
+
+  /* TS stub: one line per overload (TS supports overloaded static
+     signatures natively in .d.ts).  Must emit while
+     f_stubs_class_body is active. */
+  stub_emit_function(n, "  ", 2);
 
   Delete(swig_name); Delete(jsname); Delete(cmangle); Delete(decls); Delete(args);
   Delete(jsargs); Delete(ret_t); Delete(call_e); Delete(body);
@@ -2383,13 +3576,44 @@ int WASM_JS::globalfunctionHandler(Node *n) {
     String *hit = t ? lookup_js_class(t) : 0;
     if (hit) Append(arg0_class, hit);
   }
-  Hash *entry = NewHash();
-  Setattr(entry, "body", js_body);
-  Setattr(entry, "arg0_class", arg0_class);
-  char arity_buf[16]; snprintf(arity_buf, sizeof(arity_buf), "%d", parm_arity(p));
-  Setattr(entry, "arity", NewString(arity_buf));
-  Setattr(entry, "jsargs", Copy(jsargs));
-  Append(overloads, entry);
+
+  /* Register one entry per truncated-arity phantom overload, so e.g.
+     M.cross(a, b) (2 args) routes to the same wrapper as
+     M.cross(a, b, -1n) (3 args, with the C++ default dim=-1 filled).
+     Note: jsargs is always the FULL-arity arg list; the truncated
+     entries inject `const aN = <default>;` so the body's reference to
+     `aN` resolves. */
+  int max_arity = parm_arity_js(p);
+  int first_def = first_default_arity(p);
+  int lo_arity = (first_def >= 0) ? first_def : max_arity;
+  for (int trunc = lo_arity; trunc <= max_arity; ++trunc) {
+    Hash *entry = NewHash();
+    /* Build truncated jsargs list for this arity. */
+    String *trunc_jsargs = NewString("");
+    {
+      int s2 = 0;
+      for (Parm *q2 = p; q2; q2 = nextSibling(q2)) {
+        if (is_in_numinputs0(q2)) continue;
+        if (s2 < trunc) {
+          if (Len(trunc_jsargs) > 0) Printv(trunc_jsargs, ", ", NIL);
+          Printf(trunc_jsargs, "a%d", s2);
+        }
+        ++s2;
+      }
+    }
+    String *defaults_prologue = build_defaults_prologue(p, trunc);
+    /* The js_body uses a0..a<max-1>; prepend the defaults so any
+       missing trailing args are bound to literal defaults. */
+    String *body_with_defaults = NewStringf("%s%s",
+        Char(defaults_prologue), Char(js_body));
+    Setattr(entry, "body", body_with_defaults);
+    Setattr(entry, "arg0_class", Copy(arg0_class));
+    char arity_buf[16]; snprintf(arity_buf, sizeof(arity_buf), "%d", trunc);
+    Setattr(entry, "arity", NewString(arity_buf));
+    Setattr(entry, "jsargs", trunc_jsargs);
+    Append(overloads, entry);
+    Delete(defaults_prologue);
+  }
 
   /* TS stub emission stays per-overload (TS supports overload chains
      in .d.ts directly, unlike runtime JS). */
