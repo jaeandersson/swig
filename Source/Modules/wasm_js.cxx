@@ -59,6 +59,8 @@ public:
       global_overloads(0),
       static_overloads(0),
       member_overloads(0),
+      stub_free_fn_buckets(0),
+      stub_free_fn_order(0),
       class_has_base(false) {
     /* Phase 4.3: director-language support active.  Lib/wasm_js/director.swg
        provides Swig::Director (EM_VAL handle holder) + exception classes.
@@ -322,6 +324,16 @@ protected:
                                        non-static member methods.  Lets
                                        Sparsity.row(k) and Sparsity.row()
                                        coexist via args.length dispatch. */
+  /* Per-jsname bucket of free-function TS stub overloads, populated
+     during stub_emit_function(kind=0).  Each entry is
+     List<Hash{precedence, body}>; drained at top()-end and emitted
+     sorted ascending by precedence so TS overload-resolution picks
+     the most-specific matching overload (Sparsity < DM < SX < MX),
+     mirroring Swig_overload_rank's compile-time ranking. */
+  Hash   *stub_free_fn_buckets;
+  /* Preserves first-encounter order of buckets for deterministic
+     emission. */
+  List   *stub_free_fn_order;
   bool   class_has_base;
 
   String *mangle(const String *s) {
@@ -1383,29 +1395,83 @@ protected:
     return cpp;  /* class name, hopefully matching the emitted JS proxy */
   }
 
+  /* Rewrite bare class-name identifiers in a TS type expression to their
+     `_X` coercion-union aliases (for INPUT positions).  Mirrors python.cxx
+     `resolveStub`: walk the string, replace each identifier token by its
+     alias when present, leave punctuation alone.  Drives the same set
+     of typed-input conveniences the Python pyi exposes via _DM/_SX/_MX.
+
+     The alias set is hardcoded to match the `export type _<X> = ...`
+     block emitted by casadi.i.  Keep these two lists in sync. */
+  String *ts_apply_in_aliases(const String *expr) {
+    if (!expr || Len(expr) == 0) return NewString("any");
+    static const char *kAliases[] = {
+      "DM", "SX", "MX", "IM", "SXElem", "Slice", "GenericType", "MIndex", 0
+    };
+    /* Build a set for fast membership. */
+    Hash *alias_set = NewHash();
+    for (int i = 0; kAliases[i]; ++i) {
+      Setattr(alias_set, kAliases[i], "1");
+    }
+    String *out = NewString("");
+    const char *s = Char((String *)expr);
+    int n = Len(expr);
+    int i = 0;
+    while (i < n) {
+      if (isalpha((unsigned char)s[i]) || s[i] == '_') {
+        int j = i;
+        while (j < n && (isalnum((unsigned char)s[j]) || s[j] == '_')) j++;
+        String *ident = NewStringWithSize(s + i, j - i);
+        if (Getattr(alias_set, ident)) {
+          Printf(out, "_%s", Char(ident));
+        } else {
+          Printv(out, ident, NIL);
+        }
+        Delete(ident);
+        i = j;
+      } else {
+        char tmp[2] = {s[i], 0};
+        Printv(out, tmp, NIL);
+        i++;
+      }
+    }
+    Delete(alias_set);
+    return out;
+  }
+
   /* Pick a TypeScript type string for a parm.  Reads `tmap:in:tsstub_in`
      directly -- casadi.i populates it via the `xTsStub` argument to
      `%casadi_typemaps` / `%casadi_template`, pasted verbatim with no
      translation layer (per user direction: drop py_to_ts).  Falls back
-     to rendering the parm's C++ type through cpp_to_ts(). */
+     to rendering the parm's C++ type through cpp_to_ts().
+
+     For input positions, post-process the result through
+     ts_apply_in_aliases() to widen bare class names to their `_X`
+     coercion unions (so callers can pass a number where DM is expected,
+     etc.) -- mirroring Python's _DM/_SX/_MX hand-authored unions in pyi. */
   String *pick_ts_stub(Parm *pj, bool is_output) {
     const char *attr = is_output ? "tmap:in:tsstub_out" : "tmap:in:tsstub_in";
     String *raw = Getattr(pj, attr);
-    if (raw && Len(raw) > 0) return Copy(raw);
-    /* Fallback: render the parm's C++ type through cpp_to_ts.  Handles
-       parms whose typemap doesn't carry a `tsstub_*` attribute --
-       typical for primitive parms (casadi_int, double, bool) routed
-       through the SWIG default `(in)` rather than %casadi_typemaps.
-       SwigType_str(t, NIL) produces the normalised C++ source form
-       (`const Foo&` etc.) -- cpp_to_ts strips qualifiers/ref/ptr. */
-    SwigType *t = Getattr(pj, "type");
-    if (t) {
-      String *sname = SwigType_str(t, 0);
-      String *ts = cpp_to_ts(sname);
-      Delete(sname);
-      return ts;
+    String *base = 0;
+    if (raw && Len(raw) > 0) {
+      base = Copy(raw);
+    } else {
+      /* Fallback: render the parm's C++ type through cpp_to_ts. */
+      SwigType *t = Getattr(pj, "type");
+      if (t) {
+        String *sname = SwigType_str(t, 0);
+        base = cpp_to_ts(sname);
+        Delete(sname);
+      } else {
+        base = NewString("any");
+      }
     }
-    return NewString("any");
+    if (!is_output) {
+      String *widened = ts_apply_in_aliases(base);
+      Delete(base);
+      return widened;
+    }
+    return base;
   }
 
   /* Emit a TypeScript signature line for one (overload of a) function-like
@@ -1533,14 +1599,27 @@ protected:
       if (is_void) {
         Printv(f, "void", NIL);
       } else {
-        /* tsstub_out is populated by casadi.i's xTsStub macro arg --
-           paste verbatim. */
-        String *po = Getattr(source, "tmap:out:tsstub_out");
+        /* tsstub_out is populated by casadi.i's xTsStub macro arg.
+           wasm_js writes its own C-wrapper (build_wrapper_body) and
+           attaches the `out` typemap to a fake parm there, not to `n`.
+           Stub emission runs BEFORE that path, so `n` has no
+           tmap:out:* attrs.  Attach an `out` typemap to a temp parm
+           with the source's return type, then read tsstub_out from
+           the parm.  Matches python.cxx's lookup pattern but without
+           the side effect of running emission. */
+        SwigType *rt = Getattr(source, "type");
+        String *po = 0;
+        Parm *out_fake = 0;
+        if (rt) {
+          out_fake = NewParm(rt, NewString("result"), 0);
+          Setattr(out_fake, "lname", "result");
+          Swig_typemap_attach_parms("out", out_fake, 0);
+          po = Getattr(out_fake, "tmap:out:tsstub_out");
+        }
         if (po && Len(po) > 0) {
           Printv(f, po, NIL);
         } else {
           /* Final fallback: render the SwigType name through cpp_to_ts. */
-          SwigType *rt = Getattr(source, "type");
           String *sname = rt ? SwigType_str(rt, 0) : 0;
           if (sname) {
             String *ts = cpp_to_ts(sname);
@@ -1550,9 +1629,38 @@ protected:
             Printv(f, "any", NIL);
           }
         }
+        if (out_fake) Delete(out_fake);
       }
       Printv(f, ";\n", NIL);
     }
+  }
+
+  /* Read the maximum typecheck precedence across the parms of one
+     overload.  Lower = more specific (SWIG convention).  Used to sort
+     free-function overloads in the d.ts so TS overload-resolution
+     picks the most-specific matching declaration. */
+  int stub_overload_precedence(Node *ni) {
+    int max_prec = 0;
+    Parm *pj = Getattr(ni, "wrap:parms");
+    if (!pj) pj = Getattr(ni, "parms");
+    if (pj) Swig_typemap_attach_parms("typecheck", pj, 0);
+    while (pj) {
+      String *prec = Getattr(pj, "tmap:typecheck:precedence");
+      if (prec) {
+        int p = atoi(Char(prec));
+        if (p > max_prec) max_prec = p;
+      }
+      pj = nextSibling(pj);
+    }
+    return max_prec;
+  }
+
+  /* Strip SWIG's __SWIG_<N> overload-numbering suffix from a sym:name. */
+  String *stub_bare_jsname(const String *symname) {
+    String *bare = NewString(symname);
+    const char *suf = Strstr(bare, "__SWIG_");
+    if (suf) Delslice(bare, suf - Char(bare), DOH_END);
+    return bare;
   }
 
   void stub_emit_function(Node *n, const String *indent, int kind) {
@@ -1568,9 +1676,72 @@ protected:
     }
     for (int i = 0; i < nfunc; ++i) {
       Node *ni = Getitem(dispatch, i);
-      stub_write_signature(f_stubs, indent, ni, kind);
+      if (kind == 0) {
+        /* Free function: bucket per jsname for sorted emission at
+           top()-end.  Per-call writes to f_stubs are out of order
+           (each %template instantiation emits a separate cdecl in
+           C++-parse order, not by precedence), and TS picks the
+           FIRST matching overload -- so we need most-specific first. */
+        if (!stub_free_fn_buckets) {
+          stub_free_fn_buckets = NewHash();
+          stub_free_fn_order   = NewList();
+        }
+        String *body = NewString("");
+        stub_write_signature(body, indent, ni, kind);
+        String *symname = Getattr(ni, "sym:name");
+        String *bare = symname ? stub_bare_jsname(symname) : NewString("");
+        List *bucket = (List *)Getattr(stub_free_fn_buckets, bare);
+        if (!bucket) {
+          bucket = NewList();
+          Setattr(stub_free_fn_buckets, bare, bucket);
+          Append(stub_free_fn_order, Copy(bare));
+        }
+        Hash *entry = NewHash();
+        Setattr(entry, "precedence", NewStringf("%d", stub_overload_precedence(ni)));
+        Setattr(entry, "body", body);
+        Append(bucket, entry);
+        Delete(bare);
+        Delete(entry);
+      } else {
+        stub_write_signature(f_stubs, indent, ni, kind);
+      }
     }
     if (single) Delete(single);
+  }
+
+  /* Drain stub_free_fn_buckets into f_stubs_module, sorted ascending
+     by precedence within each bucket.  Called from top() right before
+     the d.ts file is closed. */
+  void stub_drain_free_fn_buckets() {
+    if (!stub_free_fn_buckets || !stub_free_fn_order || !f_stubs_module) return;
+    Printv(f_stubs_module,
+      "\n// --- Free functions (overloads sorted most-specific first for TS) ---\n",
+      NIL);
+    int nb = Len(stub_free_fn_order);
+    for (int i = 0; i < nb; ++i) {
+      String *name = (String *)Getitem(stub_free_fn_order, i);
+      List *bucket = (List *)Getattr(stub_free_fn_buckets, name);
+      if (!bucket) continue;
+      /* Selection-sort the bucket by ascending precedence (small N). */
+      List *sorted = NewList();
+      while (Len(bucket) > 0) {
+        int min_idx = 0;
+        int min_prec = atoi(Char((String *)Getattr((Hash *)Getitem(bucket, 0), "precedence")));
+        for (int x = 1; x < Len(bucket); ++x) {
+          int p = atoi(Char((String *)Getattr((Hash *)Getitem(bucket, x), "precedence")));
+          if (p < min_prec) { min_prec = p; min_idx = x; }
+        }
+        Hash *picked = (Hash *)Getitem(bucket, min_idx);
+        Append(sorted, picked);
+        Delitem(bucket, min_idx);
+      }
+      for (int a = 0; a < Len(sorted); ++a) {
+        Hash *e = (Hash *)Getitem(sorted, a);
+        String *body = (String *)Getattr(e, "body");
+        Printv(f_stubs_module, body, NIL);
+      }
+      Delete(sorted);
+    }
   }
 
   /* Member-variable annotation: `name: T;` (or readonly if appropriate). */
@@ -1579,20 +1750,26 @@ protected:
     String *symname = Getattr(n, "sym:name");
     if (!symname) return;
     String *ts = 0;
-    String *po = Getattr(n, "tmap:out:tsstub_out");
+    SwigType *t = Getattr(n, "type");
+    Parm *out_fake = 0;
+    String *po = 0;
+    if (t) {
+      out_fake = NewParm(t, NewString("result"), 0);
+      Setattr(out_fake, "lname", "result");
+      Swig_typemap_attach_parms("out", out_fake, 0);
+      po = Getattr(out_fake, "tmap:out:tsstub_out");
+    }
     if (po && Len(po) > 0) {
       ts = Copy(po);
+    } else if (t) {
+      String *sname = SwigType_str(t, 0);
+      ts = cpp_to_ts(sname);
+      Delete(sname);
     } else {
-      SwigType *t = Getattr(n, "type");
-      if (t) {
-        String *sname = SwigType_str(t, 0);
-        ts = cpp_to_ts(sname);
-        Delete(sname);
-      } else {
-        ts = NewString("any");
-      }
+      ts = NewString("any");
     }
     Printv(f_stubs, indent, symname, ": ", ts, ";\n", NIL);
+    if (out_fake) Delete(out_fake);
     Delete(ts);
   }
 
@@ -2761,6 +2938,9 @@ int WASM_JS::top(Node *n) {
      PEP-484 types via py_to_ts; the alias-table widening is a python-
      specific refinement we skip for now. */
   if (stubs && f_stubs_dts) {
+    /* Append sorted free-function overloads (bucketed during emission)
+       to the module body before flushing to file. */
+    stub_drain_free_fn_buckets();
     Printv(f_stubs_dts,
       "// Generated by SWIG -wasm-js -stubs. Do not edit.\n\n",
       NIL);
@@ -2853,18 +3033,74 @@ int WASM_JS::classHandler(Node *n) {
   Language::classHandler(n);
 
   if (stubs) {
-    /* Wrap collected member stubs with `export class Name { ... }`. */
+    /* Wrap collected member stubs with `export class Name { ... }`.
+       TypeScript only supports single inheritance, but the C++ side
+       often has multiple bases (e.g. MX : public GenericExpressionCommon,
+       public GenericMatrix<MX>).  SWIG's `bases` list mirrors C++
+       declaration order, which would make MX extend
+       GenericExpressionCommon -- losing access to `GenMX::sym` and
+       other typed statics.  Pick the most informative base:
+
+         1. A base named `Gen<ClassName>` (the GenericMatrix<> template
+            instantiation, where typed static `sym(...)` lives).
+         2. Failing that, the first base whose class body has any
+            members beyond the default ctors.
+         3. Failing that, the first base in declaration order.
+
+       For instance-method members of *other* bases, emit a follow-up
+       `interface <Name> extends <OtherBases...>` so TypeScript's
+       declaration-merging pulls them in.  Statics don't merge through
+       interfaces, but the C++-side overloads on common bases are
+       overwhelmingly instance members. */
     String *base_clause_ts = NewString("");
+    String *iface_clause_ts = 0;
     List *bases = Getattr(n, "bases");
     if (bases && Len(bases) > 0) {
-      Node *b = Getitem(bases, 0);
-      String *bjsname = Getattr(b, "sym:name");
+      Node *primary = 0;
+      List *secondary = NewList();
+      String *gen_target = NewStringf("Gen%s", class_jsname);
+      /* Pass 1: prefer Gen<ClassName>. */
+      for (int bi = 0; bi < Len(bases); ++bi) {
+        Node *b = Getitem(bases, bi);
+        String *bn = Getattr(b, "sym:name");
+        if (bn && Strcmp(bn, gen_target) == 0) { primary = b; break; }
+      }
+      /* Pass 2: first base in declaration order. */
+      if (!primary) primary = Getitem(bases, 0);
+      /* All other bases land in secondary. */
+      for (int bi = 0; bi < Len(bases); ++bi) {
+        Node *b = Getitem(bases, bi);
+        if (b != primary) Append(secondary, b);
+      }
+      Delete(gen_target);
+
+      String *bjsname = Getattr(primary, "sym:name");
       if (bjsname) Printf(base_clause_ts, " extends %s", bjsname);
+
+      if (Len(secondary) > 0) {
+        iface_clause_ts = NewString(" extends ");
+        bool first = true;
+        for (int bi = 0; bi < Len(secondary); ++bi) {
+          Node *b = Getitem(secondary, bi);
+          String *bn = Getattr(b, "sym:name");
+          if (!bn) continue;
+          if (!first) Printv(iface_clause_ts, ", ", NIL);
+          Printv(iface_clause_ts, bn, NIL);
+          first = false;
+        }
+        if (first) { Delete(iface_clause_ts); iface_clause_ts = 0; }
+      }
+      Delete(secondary);
     }
     Printv(saved_stubs, "export class ", class_jsname, base_clause_ts, " {\n",
                        f_stubs_class_body,
-                       "}\n\n",
+                       "}\n",
                        NIL);
+    if (iface_clause_ts) {
+      Printv(saved_stubs, "export interface ", class_jsname, iface_clause_ts, " {}\n", NIL);
+      Delete(iface_clause_ts);
+    }
+    Printv(saved_stubs, "\n", NIL);
     Delete(base_clause_ts);
     Delete(f_stubs_class_body); f_stubs_class_body = 0;
     f_stubs = saved_stubs;
