@@ -55,6 +55,7 @@ public:
       is_vector_jsname(0),
       js_to_cpp_canonical(0),
       classes_needing_probes(0),
+      types_needing_typecheck_probes(0),
       global_overloads(0),
       static_overloads(0),
       member_overloads(0),
@@ -289,6 +290,22 @@ protected:
                                        emission at top()-end so we only
                                        emit probes that are actually
                                        called. */
+  Hash   *types_needing_typecheck_probes; /* mangled type name (e.g.
+                                       "std__mapT_std__string_casadi__MX_t")
+                                       -> C++ type string (e.g.
+                                       "std::map< std::string, casadi::MX >").
+                                       For overload-dispatch on parm types
+                                       that DON'T have a registered JS class
+                                       (dicts, pairs, raw vectors); we emit
+                                       a wasm-side `swig_can_<mangled>(EM_VAL)`
+                                       wrapper that delegates to
+                                       `casadi::can_convert<T>(p)`, mirroring
+                                       SWIG's canonical typecheck typemap
+                                       (precedence + probe-mode to_ptr).
+                                       Without this the dispatcher falls
+                                       back to "no probe -> always true",
+                                       and first-source-order overload
+                                       wins regardless of actual arg type. */
   Hash   *global_overloads;        /* jsname -> List<Hash{arg0_jsclass, body,
                                        arity}>.  Built in globalfunctionHandler,
                                        drained in top() to emit a dispatcher per
@@ -342,6 +359,145 @@ protected:
      (no actual conversion).  The dispatcher uses these in place of the
      JS-side `__can(arg, "<Class>")` string-compare predicate, so dispatch
      goes through the same fuzzy-coercion path as matlab/python. */
+  /* Single-place type-check emission, shared by the three dispatcher
+     sites (global free fn / static member / non-static member).  Returns
+     the JS expression to OR into an overload's `type_checks` string, or
+     NULL if no discrim can be derived for this type.  Preference order:
+       1. Class-typed parm  -> `M._swig_can_<JsCls>(__unwrap(args[i]))`
+       2. char* parm        -> `typeof args[i] === 'string'`
+       3. primitive parm    -> typeof boolean/number/bigint
+       4. container parm    -> `M._swig_can_<mangled>(__unwrap(args[i]))`
+                                (via register_typecheck_probe; fixes the
+                                "first-overload-wins" bug for things like
+                                rootfinder(name, solver, SXDict|MXDict|Function, opts))
+       5. anything else     -> NULL (caller treats as "always true") */
+  String *build_arg_check(Parm *q, int pi) {
+    SwigType *t = Getattr(q, "type");
+    if (!t) return NULL;
+    String *cls = lookup_js_class(t);
+    if (cls && Len(cls) > 0) {
+      register_probe(cls);
+      return NewStringf("M._swig_can_%s(__unwrap(args[%d]))", Char(cls), pi);
+    }
+    String *ct = Getattr(q, "tmap:ctype");
+    if (ct && (Strstr(ct, "char*") || Strstr(ct, "char *"))) {
+      return NewStringf("typeof args[%d] === 'string'", pi);
+    }
+    if (ct && Strcmp(ct, "EM_VAL") != 0 && Strcmp(ct, "void") != 0) {
+      SwigType *tres = SwigType_typedef_resolve_all(Copy(t));
+      String *ts = SwigType_str(tres ? tres : t, 0);
+      const char *cs = ts ? Char(ts) : "";
+      String *r = NULL;
+      if (strstr(cs, "bool")) {
+        r = NewStringf("(typeof args[%d] === 'boolean' || typeof args[%d] === 'number')",
+                       pi, pi);
+      } else if (strstr(cs, "double") || strstr(cs, "float") ||
+                 strstr(cs, "int") || strstr(cs, "long") || strstr(cs, "short")) {
+        r = NewStringf("(typeof args[%d] === 'number' || typeof args[%d] === 'bigint')",
+                       pi, pi);
+      }
+      if (ts) Delete(ts);
+      if (tres) Delete(tres);
+      if (r) return r;
+    }
+    /* Fall-through: try the typecheck-probe path for container types
+       (map/pair/vector) that don't have a JS class proxy. */
+    String *probe_expr = register_typecheck_probe(t, pi);
+    if (probe_expr && Len(probe_expr) > 0) return probe_expr;
+    if (probe_expr) Delete(probe_expr);
+    return NULL;
+  }
+
+  /* Register a typecheck-probe for a type that doesn't have a JS class
+     proxy (typically std::map / std::pair / unwrapped std::vector).
+     Driven from the dispatcher emission sites: when an overload has a
+     parm whose type can't be discriminated via _swig_can_<Class>, fall
+     back to a `casadi::can_convert<T>(p)` probe.  Returns the JS-side
+     probe expression to embed in `type_checks` (or empty string if the
+     type can't be probed).  The actual probe wrapper is emitted by
+     emit_typecheck_probe_wrappers() at end-of-top. */
+  String *register_typecheck_probe(SwigType *t, int parm_idx) {
+    if (!t) return NewString("");
+    /* Strip cv/&/* down to the canonical type for mangling.  ltype gives
+       us the "language type" (no const, no reference) which mangles
+       cleanly. */
+    SwigType *lt = SwigType_ltype(t);
+    SwigType *bare = lt ? lt : Copy(t);
+    /* SwigType_ltype rewrites references as pointers (C has no `&`).
+       For typecheck-probe purposes we want the VALUE type, so peel
+       any leading pointer too.  Otherwise the probe ends up
+       instantiating can_convert<std::map<...>*> instead of
+       can_convert<std::map<...>>, which never compiles or always
+       returns false. */
+    if (SwigType_isreference(bare)) SwigType_del_reference(bare);
+    if (SwigType_ispointer(bare))   SwigType_del_pointer(bare);
+    /* Resolve typedefs so casadi::SXDict -> std::map<std::string,
+       Matrix<SXElem>>, etc.  Without this the strstr below misses
+       typedef'd container types and the dispatcher reverts to the
+       broken first-overload-wins behavior. */
+    SwigType *resolved = SwigType_typedef_resolve_all(bare);
+    SwigType *effective = resolved ? resolved : bare;
+    String *cpp_resolved = SwigType_str(effective, 0);
+    if (!cpp_resolved || Len(cpp_resolved) == 0) {
+      Delete(cpp_resolved); if (resolved) Delete(resolved); Delete(bare);
+      return NewString("");
+    }
+    /* Only probe for "container-shaped" types: map, pair, unwrapped
+       vector.  Class types should have gone through lookup_js_class
+       first; primitives are handled by the typeof check upstream. */
+    const char *cs = Char(cpp_resolved);
+    bool is_container = (strstr(cs, "std::map") != 0)
+                     || (strstr(cs, "std::pair") != 0)
+                     || (strstr(cs, "std::vector") != 0);
+    if (!is_container) {
+      Delete(cpp_resolved); if (resolved) Delete(resolved); Delete(bare);
+      return NewString("");
+    }
+    /* Mangle the RESOLVED type so the probe wrapper's body sees the
+       fully-expanded T (the typedef may not be visible at the
+       %insert("header") fragment boundary). */
+    String *mangled = SwigType_manglestr(effective);  /* "_std__mapT_..._t" */
+    /* Drop leading underscore so the symbol reads `swig_can_std__map...`,
+       consistent with `swig_can_<Class>` naming. */
+    const char *mc = Char(mangled);
+    while (*mc == '_') ++mc;
+    String *probe_id = NewString(mc);
+    if (!types_needing_typecheck_probes) types_needing_typecheck_probes = NewHash();
+    Setattr(types_needing_typecheck_probes, probe_id, cpp_resolved);
+    String *expr = NewStringf("M._swig_can_%s(__unwrap(args[%d]))",
+                              Char(probe_id), parm_idx);
+    Delete(probe_id); Delete(mangled); Delete(cpp_resolved);
+    if (resolved) Delete(resolved); Delete(bare);
+    return expr;
+  }
+
+  /* Emit `EMSCRIPTEN_KEEPALIVE int swig_can_<mangled>(EM_VAL p)` per
+     registered typecheck-probe.  Each delegates to
+     `casadi::can_convert<T>(p)` which calls the per-T `to_ptr(p, T**=0)`
+     probe -- identical to SWIG's standard typecheck typemap body. */
+  void emit_typecheck_probe_wrappers() {
+    if (!types_needing_typecheck_probes) return;
+    Printf(f_cpp_wrappers,
+      "\n/* --- Typecheck probes for non-class container types "
+      "(maps/pairs/vectors) referenced from overload dispatchers. --- */\n");
+    Iterator it = First(types_needing_typecheck_probes);
+    while (it.key) {
+      String *probe_id = (String *)it.key;
+      String *cpp_t    = (String *)it.item;
+      String *swig_name = NewStringf("swig_can_%s", Char(probe_id));
+      Printf(f_cpp_wrappers,
+        "EMSCRIPTEN_KEEPALIVE int %s(EM_VAL p) {\n"
+        "  if (!p) return 0;\n"
+        "  typedef %s _T;\n"
+        "  return casadi::can_convert<_T>(p) ? 1 : 0;\n"
+        "}\n",
+        Char(swig_name), Char(cpp_t));
+      register_export(Char(swig_name));
+      Delete(swig_name);
+      it = Next(it);
+    }
+  }
+
   void emit_probe_wrappers() {
     if (!classes_needing_probes || !js_to_cpp_canonical) return;
     Printf(f_cpp_wrappers, "\n/* --- Probe wrappers (Phase 3.3): "
@@ -2388,6 +2544,7 @@ int WASM_JS::top(Node *n) {
      cast chain accepts subclasses), then falls back to can_convert<T>
      for fuzzy coercion (array/Dict/scalar paths). */
   emit_probe_wrappers();
+  emit_typecheck_probe_wrappers();
 
   /* Phase 3.2: cast-chain init.  Forward-declared in wasm_jsrun.swg;
      defined here, after swig_type_initial / swig_cast_initial are
@@ -3725,42 +3882,7 @@ int WASM_JS::memberfunctionHandler(Node *n) {
       for (Parm *q2 = p; q2; q2 = nextSibling(q2)) {
         if (is_in_numinputs0(q2)) continue;
         if (pi2 >= trunc) break;
-        SwigType *t2 = Getattr(q2, "type");
-        String *check = NULL;
-        String *cls = lookup_js_class(t2);
-        if (cls && Len(cls) > 0) {
-          register_probe(cls);
-          char buf[256];
-          snprintf(buf, sizeof(buf), "M._swig_can_%s(__unwrap(args[%d]))",
-                   Char(cls), pi2);
-          check = NewString(buf);
-        } else {
-          String *ct = Getattr(q2, "tmap:ctype");
-          if (ct && (Strstr(ct, "char*") || Strstr(ct, "char *"))) {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "typeof args[%d] === 'string'", pi2);
-            check = NewString(buf);
-          } else if (ct && Strcmp(ct, "EM_VAL") != 0 && Strcmp(ct, "void") != 0) {
-            SwigType *tres = SwigType_typedef_resolve_all(Copy(t2));
-            String *ts = SwigType_str(tres ? tres : t2, 0);
-            const char *cs = ts ? Char(ts) : "";
-            char buf[128];
-            if (strstr(cs, "bool")) {
-              snprintf(buf, sizeof(buf),
-                "(typeof args[%d] === 'boolean' || typeof args[%d] === 'number')",
-                pi2, pi2);
-              check = NewString(buf);
-            } else if (strstr(cs, "double") || strstr(cs, "float") ||
-                       strstr(cs, "int") || strstr(cs, "long") || strstr(cs, "short")) {
-              snprintf(buf, sizeof(buf),
-                "(typeof args[%d] === 'number' || typeof args[%d] === 'bigint')",
-                pi2, pi2);
-              check = NewString(buf);
-            }
-            if (ts) Delete(ts);
-            if (tres) Delete(tres);
-          }
-        }
+        String *check = build_arg_check(q2, pi2);
         if (check) {
           if (Len(type_checks) > 0) Printv(type_checks, " && ", NIL);
           Printv(type_checks, check, NIL);
@@ -3951,42 +4073,7 @@ int WASM_JS::staticmemberfunctionHandler(Node *n) {
       for (Parm *q2 = p; q2; q2 = nextSibling(q2)) {
         if (is_in_numinputs0(q2)) continue;
         if (pi2 >= trunc) break;
-        SwigType *t2 = Getattr(q2, "type");
-        String *check = NULL;
-        String *cls = lookup_js_class(t2);
-        if (cls && Len(cls) > 0) {
-          register_probe(cls);
-          char buf[256];
-          snprintf(buf, sizeof(buf), "M._swig_can_%s(__unwrap(args[%d]))",
-                   Char(cls), pi2);
-          check = NewString(buf);
-        } else {
-          String *ct = Getattr(q2, "tmap:ctype");
-          if (ct && (Strstr(ct, "char*") || Strstr(ct, "char *"))) {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "typeof args[%d] === 'string'", pi2);
-            check = NewString(buf);
-          } else if (ct && Strcmp(ct, "EM_VAL") != 0 && Strcmp(ct, "void") != 0) {
-            SwigType *tres = SwigType_typedef_resolve_all(Copy(t2));
-            String *ts = SwigType_str(tres ? tres : t2, 0);
-            const char *cs = ts ? Char(ts) : "";
-            char buf[128];
-            if (strstr(cs, "bool")) {
-              snprintf(buf, sizeof(buf),
-                "(typeof args[%d] === 'boolean' || typeof args[%d] === 'number')",
-                pi2, pi2);
-              check = NewString(buf);
-            } else if (strstr(cs, "double") || strstr(cs, "float") ||
-                       strstr(cs, "int") || strstr(cs, "long") || strstr(cs, "short")) {
-              snprintf(buf, sizeof(buf),
-                "(typeof args[%d] === 'number' || typeof args[%d] === 'bigint')",
-                pi2, pi2);
-              check = NewString(buf);
-            }
-            if (ts) Delete(ts);
-            if (tres) Delete(tres);
-          }
-        }
+        String *check = build_arg_check(q2, pi2);
         if (check) {
           if (Len(type_checks) > 0) Printv(type_checks, " && ", NIL);
           Printv(type_checks, check, NIL);
@@ -4118,42 +4205,7 @@ int WASM_JS::globalfunctionHandler(Node *n) {
       for (Parm *q2 = p; q2; q2 = nextSibling(q2)) {
         if (is_in_numinputs0(q2)) continue;
         if (pi2 >= trunc) break;
-        SwigType *t2 = Getattr(q2, "type");
-        String *check = NULL;
-        String *cls = lookup_js_class(t2);
-        if (cls && Len(cls) > 0) {
-          register_probe(cls);
-          char buf[256];
-          snprintf(buf, sizeof(buf), "M._swig_can_%s(__unwrap(args[%d]))",
-                   Char(cls), pi2);
-          check = NewString(buf);
-        } else {
-          String *ct = Getattr(q2, "tmap:ctype");
-          if (ct && (Strstr(ct, "char*") || Strstr(ct, "char *"))) {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "typeof args[%d] === 'string'", pi2);
-            check = NewString(buf);
-          } else if (ct && Strcmp(ct, "EM_VAL") != 0 && Strcmp(ct, "void") != 0) {
-            SwigType *tres = SwigType_typedef_resolve_all(Copy(t2));
-            String *ts = SwigType_str(tres ? tres : t2, 0);
-            const char *cs = ts ? Char(ts) : "";
-            char buf[128];
-            if (strstr(cs, "bool")) {
-              snprintf(buf, sizeof(buf),
-                "(typeof args[%d] === 'boolean' || typeof args[%d] === 'number')",
-                pi2, pi2);
-              check = NewString(buf);
-            } else if (strstr(cs, "double") || strstr(cs, "float") ||
-                       strstr(cs, "int") || strstr(cs, "long") || strstr(cs, "short")) {
-              snprintf(buf, sizeof(buf),
-                "(typeof args[%d] === 'number' || typeof args[%d] === 'bigint')",
-                pi2, pi2);
-              check = NewString(buf);
-            }
-            if (ts) Delete(ts);
-            if (tres) Delete(tres);
-          }
-        }
+        String *check = build_arg_check(q2, pi2);
         if (check) {
           if (Len(type_checks) > 0) Printv(type_checks, " && ", NIL);
           Printv(type_checks, check, NIL);
