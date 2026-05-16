@@ -2090,8 +2090,16 @@ SWIG_Python_ArgsTypeDesc(PyObject* args, PyObject** bytes) {
     if (res) {
       PyObject* res_str = PyObject_Repr(res);
       if (res_str) {
-        res_char = SWIG_PyUnicode_AsUTF8AndSize(res_str, NULL, bytes);
-        if (!res_char) { Py_XDECREF(*bytes); *bytes = NULL; }
+        /* Use the owning-bytes pattern unconditionally. SWIG_PyUnicode_AsUTF8AndSize
+           under Py_LIMITED_API >= 0x030A0000 returns the internal buffer of res_str
+           with *bytes=NULL, meaning the buffer is invalidated by Py_DECREF(res_str)
+           below -- caller would then read freed memory through res_char and pass
+           it to PyErr_SetString, which is what triggers test_DMcrash on py3.13+
+           (UAF surfaces as Objects/typeobject.c:2341 type_call assertion in debug
+           builds, or a SIGSEGV on release Python). Build an OWNING bytes object so
+           res_char remains valid until the caller's Py_XDECREF(*bytes). */
+        *bytes = PyUnicode_AsUTF8String(res_str);
+        if (*bytes) res_char = PyBytes_AsString(*bytes);
         Py_DECREF(res_str);
       }
       Py_DECREF(res);
