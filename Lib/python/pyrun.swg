@@ -2122,6 +2122,17 @@ SWIGRUNTIME const char*
 SWIG_Python_ArgsTypeDesc_funpack(int nobjs, PyObject** swig_obj, PyObject** bytes) {
   PyObject *t = PyTuple_New(nobjs);
   for (int i=0;i<nobjs;++i) {
+    /* swig_obj[i] is a BORROWED reference (from SWIG_Python_UnpackTuple
+       in the dispatcher). PyTuple_SET_ITEM STEALS the reference without
+       incrementing it, so Py_DECREF(t) below would over-decref the
+       caller's borrowed refs -- typically dropping the dispatcher's
+       argv[0] to refcount 0, freeing it, and leaving args[0] dangling.
+       The interpreter's later Py_DECREF(args) then dereferences freed
+       memory. On py3.7-3.11 the freed slot often still contained
+       plausible data and the bug was silent; on macOS arm64 it crashes
+       deterministically with SIGSEGV (test_DMcrash, all py versions).
+       Take a fresh reference for the tuple so Py_DECREF(t) is balanced. */
+    Py_INCREF(swig_obj[i]);
     PyTuple_SET_ITEM(t, i, swig_obj[i]);
   }
   const char* res = SWIG_Python_ArgsTypeDesc(t, bytes);
