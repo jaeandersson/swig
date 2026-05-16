@@ -383,20 +383,40 @@ protected:
     if (ct && (Strstr(ct, "char*") || Strstr(ct, "char *"))) {
       return NewStringf("typeof args[%d] === 'string'", pi);
     }
-    if (ct && Strcmp(ct, "EM_VAL") != 0 && Strcmp(ct, "void") != 0) {
+    /* Primitive check.  Resolve typedefs and inspect SWIG's type-kind
+       enum: T_BOOL / T_CHAR / T_INT / T_LONG / T_LONGLONG / T_FLOAT /
+       T_DOUBLE / ... are scalar primitives that round-trip to JS as
+       number or bigint.
+       Important: gating on `tmap:ctype` (as we used to) misses
+       casadi_int / long long / double / etc. -- SWIG doesn't emit a
+       ctype typemap for primitives that need no C-side translation,
+       so `Getattr(q, "tmap:ctype")` is NULL for them.  Using
+       SwigType_type on the resolved type is the canonical way to
+       discriminate primitive scalars from class / pointer / aggregate
+       types. */
+    {
       SwigType *tres = SwigType_typedef_resolve_all(Copy(t));
-      String *ts = SwigType_str(tres ? tres : t, 0);
-      const char *cs = ts ? Char(ts) : "";
+      SwigType *effective = tres ? tres : t;
+      /* Strip leading cv/ref/ptr (effective is "long long const &" etc.). */
+      SwigType *bare = SwigType_ltype(effective);
+      if (bare && SwigType_isreference(bare)) SwigType_del_reference(bare);
+      if (bare && SwigType_ispointer(bare))   SwigType_del_pointer(bare);
+      SwigType *toinspect = bare ? bare : effective;
+      int tk = SwigType_type(toinspect);
       String *r = NULL;
-      if (strstr(cs, "bool")) {
+      if (tk == T_BOOL) {
         r = NewStringf("(typeof args[%d] === 'boolean' || typeof args[%d] === 'number')",
                        pi, pi);
-      } else if (strstr(cs, "double") || strstr(cs, "float") ||
-                 strstr(cs, "int") || strstr(cs, "long") || strstr(cs, "short")) {
+      } else if (tk == T_INT  || tk == T_UINT
+              || tk == T_SHORT || tk == T_USHORT
+              || tk == T_LONG  || tk == T_ULONG
+              || tk == T_LONGLONG || tk == T_ULONGLONG
+              || tk == T_SCHAR || tk == T_UCHAR
+              || tk == T_FLOAT || tk == T_DOUBLE) {
         r = NewStringf("(typeof args[%d] === 'number' || typeof args[%d] === 'bigint')",
                        pi, pi);
       }
-      if (ts) Delete(ts);
+      if (bare) Delete(bare);
       if (tres) Delete(tres);
       if (r) return r;
     }
