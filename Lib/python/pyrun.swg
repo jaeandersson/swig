@@ -2077,23 +2077,30 @@ SWIG_Python_ArgsTypeDesc(PyObject* args, PyObject** bytes) {
   if (!dict) return res_char;
   PyObject* fun = PyDict_GetItemString(dict, (char*)"swigtypeconvertor");
   if (fun && PyCallable_Check(fun)) {
-    /* Python 3.13+ asserts that PyObject_CallObject is not invoked with
-       a pending exception. This helper is called from the fail: block of
-       SWIG overloaded-function dispatchers, where the failed to_ptr probes
-       have already set a NotImplementedError. Save and restore that error
-       around the call so we satisfy the assertion without losing the
-       dispatcher's pending exception. */
+    /* Python 3.13+ asserts no pending exception on entry to
+       PyObject_CallObject AND PyObject_Repr AND many other entry points.
+       This helper is called from the fail: block of SWIG overloaded-
+       function dispatchers, where the failed to_ptr probes have
+       already set a NotImplementedError. Save it around the ENTIRE
+       body (Call + Repr + UTF8) and restore once before returning,
+       so the caller still propagates the original dispatcher error. */
     PyObject *exc_type = NULL, *exc_value = NULL, *exc_tb = NULL;
     PyErr_Fetch(&exc_type, &exc_value, &exc_tb);
     PyObject* res = PyObject_CallObject(fun, args);
+    if (res) {
+      PyObject* res_str = PyObject_Repr(res);
+      if (res_str) {
+        res_char = SWIG_PyUnicode_AsUTF8AndSize(res_str, NULL, bytes);
+        if (!res_char) { Py_XDECREF(*bytes); *bytes = NULL; }
+        Py_DECREF(res_str);
+      }
+      Py_DECREF(res);
+    }
+    /* Any failure from the calls above sets a fresh PyErr; clear it
+       before restoring the dispatcher's original exception so we don't
+       chain them. */
+    if (PyErr_Occurred()) PyErr_Clear();
     if (exc_type) PyErr_Restore(exc_type, exc_value, exc_tb);
-    if (!res) return res_char;
-    PyObject* res_str = PyObject_Repr(res);
-    if (!res_str) { Py_DECREF(res); return res_char;}
-    res_char = SWIG_PyUnicode_AsUTF8AndSize(res_str, NULL, bytes);
-    if (!res_char) { Py_XDECREF(*bytes); *bytes = NULL; Py_DECREF(res_str); Py_DECREF(res); return res_char;}
-    Py_DECREF(res_str);
-    Py_DECREF(res);
   }
   return res_char;
 }
