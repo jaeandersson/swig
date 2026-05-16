@@ -215,8 +215,27 @@ _argouts[_argout_idx++] = (void*)(X);
 %typemap(jsfree) std::vector<T>, const std::vector<T>&, std::vector<T>& %{
       if (__vown$argnum && __vp$argnum.delete) __vp$argnum.delete();
 %}
+// Vector returns: with the wasmjs_vector_descriptor<T> trait
+// specialization emitted below, from_ptr<std::vector<T>> in casadi.i
+// passes the per-T swig_type_info* to SWIG_NewPointerObj, which then
+// routes through type->clientdata + M.__wrap_NAME(ptr) to produce a
+// fully-wrapped NAME proxy directly.  __from_handle just unboxes it,
+// __vec_to_arr drains it -- no JS-side rewrap required.
 %typemap(jsout) std::vector<T>, const std::vector<T>&, std::vector<T>&
-"__vec_to_arr(new NAME(__PRIVATE_CTOR, __from_handle($call)))"
+"__vec_to_arr(__from_handle($call))"
+
+// Per-T trait specialization: store the JS class name as a static
+// string.  from_ptr<std::vector<T>> reads it and routes through
+// SWIG_WASMJS_WrapByName(ptr, name) -> M.__wrap_<NAME>(ptr).
+// (#NAME here is the SWIG preprocessor stringification of the macro
+// arg NAME -- e.g. %wasm_vec(casadi::MX, MXVector) emits "MXVector".)
+%insert("header") %{
+namespace casadi {
+  template<> struct wasmjs_vector_jsname< T > {
+    static const char* get() { return #NAME; }
+  };
+}
+%}
 %enddef
 
 

@@ -50,6 +50,7 @@ public:
       member_names_seen(0), member_overload_counts(0),
       global_names_seen(0), global_overload_counts(0),
       cpp_to_js_class(0),
+      mangle_to_jsname(0),
       cpp_to_js_vector_class(0),
       is_vector_jsname(0),
       js_to_cpp_canonical(0),
@@ -256,6 +257,12 @@ protected:
                                        Populated in classHandler, consulted by
                                        js_marshal_return to wrap class-typed
                                        returns as `new Foo(__PRIVATE_CTOR, ptr)`. */
+  Hash   *mangle_to_jsname;        /* "_p_casadi__Foo" -> "Foo" (SWIG mangled
+                                       pointer-type name -> JS class name).
+                                       Drives the swig_type_info::clientdata
+                                       population in SWIG_WASMJS_init_cast_chains,
+                                       so SWIG_WASMJS_NewPointerObj can call
+                                       back into JS via M.__wrap_<JsName>. */
   Hash   *cpp_to_js_vector_class;  /* C++ vector type -> JS vector class name
                                        (e.g. "std::vector< casadi::MX >" ->
                                        "MXVector").  Subset of cpp_to_js_class
@@ -999,10 +1006,15 @@ protected:
     } else {
       /* Resolve to a registered JS class name via the canonical helper
          (handles cv/&/* stripping, typedef-resolution, namestr form, and
-         last-`::` namespace fallback in one place). */
+         last-`::` namespace fallback in one place).  Class-typed returns
+         are now wrapped C++-side in SWIG_WASMJS_NewPointerObj (consults
+         swig_type_info::clientdata, calls M.__wrap_<JsName>); the
+         EM_VAL coming back already carries the typed proxy, so we just
+         unbox via __from_handle.  No JS-side `new Cls(__PRIVATE_CTOR,
+         ...)` rewrap needed. */
       String *jsname = lookup_js_class(rt);
       if (jsname && Len(jsname) > 0) {
-        r = NewStringf("new %s(__PRIVATE_CTOR, __from_handle(%s))", Char(jsname), expr);
+        r = NewStringf("__from_handle(%s)", expr);
       } else {
         /* WASM_JS_DEBUG_WRAP=1 logs lookup misses for tuning the
            pre-pass keyset.  Useful when extending the .i file with new
@@ -1617,16 +1629,26 @@ protected:
       SwigType *lt = SwigType_ltype(rt);
       String *lt_str = SwigType_str(lt, 0);
       /* T_USER + no explicit `out` typemap: heap-clone the result and
-         wrap as an EM_VAL via SWIG_NewPointerObj (the shared runtime
-         in Lib/wasm_js/wasm_jsrun.swg builds the JS-side
-         `{_ptr: <int>}` carrier).  Used by SWIGTYPE-default outputs
-         that don't go through casadi.i's `%casadi_output_typemaps`.
-         Stash the `new` result in a local first: lt_str may contain
-         template commas (e.g. std::pair<A, B>), which the C
-         preprocessor would otherwise tokenize as multiple macro
-         args. */
+         wrap as an EM_VAL via SWIG_NewPointerObj.  Pass the proper
+         swig_type_info* (looked up by SWIG-mangled pointer name) so
+         the runtime's clientdata branch fires and produces a
+         fully-typed JS proxy via M.__wrap_<JsName>(ptr), instead of
+         a bare `{_ptr}` carrier.  Without this, `opti.solve()` etc.
+         return raw carriers and downstream `.value()` calls fail
+         with "method is not a function".  Stash the `new` result in
+         a local first: lt_str may contain template commas (e.g.
+         std::pair<A, B>), which the C preprocessor would otherwise
+         tokenize as multiple macro args.  __ti is function-local
+         static so the SWIG_TypeQuery hash lookup happens once. */
+      SwigType *ptr_t = Copy(rt);
+      SwigType_add_pointer(ptr_t);
+      String *mangled = SwigType_manglestr(ptr_t);
       Printf(out, "  %s* _heap = new %s(result);\n", lt_str, lt_str);
-      Printf(out, "  _outv = SWIG_NewPointerObj(_heap, 0, SWIG_POINTER_OWN);\n");
+      Printf(out,
+        "  static swig_type_info* __out_ti = SWIG_TypeQuery(\"%s\");\n"
+        "  _outv = SWIG_NewPointerObj(_heap, __out_ti, SWIG_POINTER_OWN);\n",
+        mangled);
+      Delete(mangled); Delete(ptr_t);
       Delete(lt_str); Delete(lt);
     } else {
       Printf(out, "  _outv = result;\n");  /* identity default */
@@ -2150,12 +2172,15 @@ int WASM_JS::top(Node *n) {
      indices into Embind's value table.  __unwrap converts a JS proxy
      instance (which carries `_ptr`) to an EM_VAL via the embind
      translator `__swig_take_handle` (registered by wasm_jsrun.swg).
-     __from_handle is the reverse for returns: pulls the JS-side carrier
-     object back out of an EM_VAL via `__swig_release_handle` and reads
-     `_ptr` to feed into the proxy class constructor. */
+     __from_handle is the reverse for returns: pulls the JS-side value
+     back out of an EM_VAL via `__swig_release_handle`.  Since
+     SWIG_WASMJS_NewPointerObj now consults swig_type_info::clientdata
+     and calls M.__wrap_<JsName>(ptr) C++-side, the EM_VAL already
+     carries a fully-wrapped proxy instance -- __from_handle just
+     unboxes it, no JS-side rewrap required. */
   Printf(f_js_pre,
     "  const __unwrap      = a => M.__swig_take_handle(a);\n"
-    "  const __from_handle = h => M.__swig_release_handle(h)._ptr;\n"
+    "  const __from_handle = h => M.__swig_release_handle(h);\n"
     "  const __unwrap_args = (...args) => args.map(__unwrap);\n"
     "  // Error-readback wrapper.  Every wasm call site is wrapped in\n"
     "  // __chk() so a typemap conversion failure on the C++ side (which\n"
@@ -2391,7 +2416,48 @@ int WASM_JS::top(Node *n) {
     "   binary search.  CANNOT sort swig_types[] in place: the\n"
     "   SWIGTYPE_p_<X> macros hard-code indices into swig_types, so\n"
     "   shuffling would break every wrapper.  Same size as swig_types. */\n"
-    "static swig_type_info *swig_types_sorted[sizeof(swig_types)/sizeof(swig_types[0])];\n"
+    "static swig_type_info *swig_types_sorted[sizeof(swig_types)/sizeof(swig_types[0])];\n");
+
+  /* Emit the (mangled_pointer_type, JS class name) table used by
+     init_cast_chains to populate swig_type_info::clientdata.  Once
+     clientdata is set, SWIG_WASMJS_NewPointerObj returns fully-wrapped
+     JS proxy instances via M.__wrap_<JsName>(ptr) -- matching the
+     matlabrun.swg/SWIG_Matlab_NewPointerObj approach where C++ owns
+     the wrap, JS doesn't post-decorate. */
+  Printf(f_cpp_wrappers,
+    "static const struct { const char *sname; const char *jsname; } "
+    "swig_js_classes[] = {\n");
+  if (mangle_to_jsname) {
+    Iterator mit = First(mangle_to_jsname);
+    while (mit.key) {
+      Printf(f_cpp_wrappers,
+        "  { \"%s\", \"%s\" },\n", (String *)mit.key, (String *)mit.item);
+      mit = Next(mit);
+    }
+  }
+  Printf(f_cpp_wrappers,
+    "  { 0, 0 }\n"
+    "};\n");
+
+  /* Reverse lookup: JS class name -> swig_type_info*.  Used by
+     user-side trait specializations (e.g. casadi.i's
+     wasmjs_vector_descriptor<M>::get()) that need to pass a typed
+     descriptor to SWIG_NewPointerObj at template-instantiation sites
+     where $descriptor(...) isn't available.  Linear scan; callers
+     cache in a function-local static. */
+  Printf(f_cpp_wrappers,
+    "SWIGRUNTIME swig_type_info* SWIG_WASMJS_LookupByJsName(const char* js_name) {\n"
+    "  if (!js_name) return 0;\n"
+    "  for (size_t i = 0; i < swig_module.size; ++i) {\n"
+    "    if (swig_type_initial[i] && swig_type_initial[i]->clientdata\n"
+    "        && strcmp((const char*)swig_type_initial[i]->clientdata, js_name) == 0) {\n"
+    "      return swig_type_initial[i];\n"
+    "    }\n"
+    "  }\n"
+    "  return 0;\n"
+    "}\n");
+
+  Printf(f_cpp_wrappers,
     "void SWIG_WASMJS_init_cast_chains() {\n"
     "  for (size_t i = 0; i < swig_module.size; ++i) {\n"
     "    if (swig_type_initial[i] && swig_cast_initial[i] && swig_cast_initial[i]->type) {\n"
@@ -2399,6 +2465,19 @@ int WASM_JS::top(Node *n) {
     "    }\n"
     "    swig_types[i] = swig_type_initial[i];\n"
     "    swig_types_sorted[i] = swig_type_initial[i];\n"
+    "    /* Wire clientdata to the JS class name (string-match by\n"
+    "       swig_type_info::name).  Linear scan -- n is small (~60).\n"
+    "       Types without a registered JS class leave clientdata null;\n"
+    "       SWIG_WASMJS_NewPointerObj falls back to a bare {_ptr} carrier\n"
+    "       for those. */\n"
+    "    if (swig_type_initial[i] && swig_type_initial[i]->name) {\n"
+    "      for (size_t j = 0; swig_js_classes[j].sname; ++j) {\n"
+    "        if (strcmp(swig_type_initial[i]->name, swig_js_classes[j].sname) == 0) {\n"
+    "          swig_type_initial[i]->clientdata = (void *)swig_js_classes[j].jsname;\n"
+    "          break;\n"
+    "        }\n"
+    "      }\n"
+    "    }\n"
     "  }\n"
     "  /* Insertion sort the COPY by name (n=61, runs once). */\n"
     "  for (size_t i = 1; i < swig_module.size; ++i) {\n"
@@ -3084,6 +3163,14 @@ int WASM_JS::classHandler(Node *n) {
     Printf(f_js_classes,
       "  %s.prototype._swig_type = '%s';\n",
       class_jsname, swig_tag);
+    /* Record `swig_tag -> JS class name` so top() can emit a static
+       table that SWIG_WASMJS_init_cast_chains uses to wire
+       swig_type_info::clientdata.  Once clientdata is set,
+       SWIG_WASMJS_NewPointerObj returns fully-typed proxy instances
+       directly, eliminating the JS-side `new <Cls>(__PRIVATE_CTOR, ...)`
+       rewrap. */
+    if (!mangle_to_jsname) mangle_to_jsname = NewHash();
+    Setattr(mangle_to_jsname, swig_tag, class_jsname);
     Delete(swig_tag);
     Delete(ptr_t);
   }
@@ -3544,21 +3631,24 @@ int WASM_JS::memberfunctionHandler(Node *n) {
   /* Use SWIG_TypeQuery so types not present in the swig_types[] table
      (e.g. unregistered std::vector instantiations like DoubleVector)
      fall back to NULL gracefully -- same behavior as pre-Phase-4.3,
-     no cast-chain conversion but the wrapper still works. */
+     no cast-chain conversion but the wrapper still works.  Cache the
+     descriptor in a function-local static so each wrapper pays the
+     hash lookup only on the first call. */
   Printf(class_cpp_section,
     "EMSCRIPTEN_KEEPALIVE %s %s(EM_VAL self_handle%s%s) {\n"
+    "  static swig_type_info* __self_ti = SWIG_TypeQuery(\"%s\");\n"
     "  %s%s* self = 0;\n"
     "  {\n"
     "    void* _self_raw = 0;\n"
-    "    if (!SWIG_IsOK(SWIG_ConvertPtr(self_handle, &_self_raw, SWIG_TypeQuery(\"%s\"), 0))) "
+    "    if (!SWIG_IsOK(SWIG_ConvertPtr(self_handle, &_self_raw, __self_ti, 0))) "
         "SWIG_exception_fail(SWIG_TypeError, \"self conversion failed\");\n"
     "    self = static_cast<%s%s*>(_self_raw);\n"
     "  }\n"
     "%s}\n",
     ret_t, swig_name,
     Len(decls) > 0 ? ", " : "", decls,
-    self_q, class_cname,
     self_mangled,
+    self_q, class_cname,
     self_q, class_cname,
     body);
   Delete(self_ptr_t);

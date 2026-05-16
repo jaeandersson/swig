@@ -182,13 +182,27 @@ SWIG_WASMJS_ConvertPtr(EM_VAL obj, void **pptr, swig_type_info *type, int flags)
   return SWIG_WASMJS_ConvertPtrAndOwn(obj, pptr, type, flags, 0);
 }
 
-/* Wrap a raw C++ pointer in a JS-side proxy carrier: a plain JS object
-   `{_ptr: <int>}` whose handle we return as an EM_VAL.  The JS-side
-   marshal layer (__from_handle in f_js_pre) calls __swig_release_handle
-   to recover the object and read `_ptr`. */
+/* Wrap a raw C++ pointer in a fully-typed JS proxy instance.
+   When `type->clientdata` is non-null (set by SWIG_WASMJS_init_cast_chains
+   to the JS class name, e.g. "MX"), call back into JS via
+   `M.__wrap_<JsName>(ptr)` -- which does `new JsName(__PRIVATE_CTOR, ptr)`
+   -- to produce a real proxy with `_swig_type` on the prototype.  Mirrors
+   matlabrun.swg::SWIG_Matlab_NewPointerObj's mexCallMATLAB("<Class>_construct",...)
+   call.  Falls back to a bare `{_ptr}` carrier when clientdata is unset
+   (untyped pointers, types without a registered class). */
 SWIGRUNTIME EM_VAL
-SWIG_WASMJS_NewPointerObj(void *ptr, swig_type_info *SWIGUNUSEDPARM(type), int SWIGUNUSEDPARM(flags)) {
+SWIG_WASMJS_NewPointerObj(void *ptr, swig_type_info *type, int SWIGUNUSEDPARM(flags)) {
   if (!ptr) return 0;
+  if (type && type->clientdata) {
+    const char *js_name = (const char *)type->clientdata;
+    std::string attr = "__wrap_";
+    attr += js_name;
+    emscripten::val wrap = emscripten::val::module_property(attr.c_str());
+    if (!wrap.isUndefined() && !wrap.isNull()) {
+      emscripten::val proxy = wrap(emscripten::val(reinterpret_cast<uintptr_t>(ptr)));
+      return proxy.release_ownership();
+    }
+  }
   emscripten::val obj = emscripten::val::object();
   obj.set("_ptr", emscripten::val(reinterpret_cast<uintptr_t>(ptr)));
   return obj.release_ownership();
@@ -252,6 +266,34 @@ SWIGRUNTIME const char* SWIG_ErrorType(int code) {
 
 #define SWIG_DirOutFail(code, msg) \
   Swig::DirectorTypeMismatchException::raise(SWIG_ErrorType(code), msg)
+
+/* Forward decl: definition emitted by wasm_js.cxx::top() alongside
+   the swig_js_classes[] table (needs swig_type_initial[] which lives
+   in the wrappers section, declared later in the generated .cpp). */
+SWIGRUNTIME swig_type_info* SWIG_WASMJS_LookupByJsName(const char* js_name);
+
+/* Wrap a raw C++ pointer via M.__wrap_<js_name>(ptr).  Bypasses
+   swig_type_info, so usable for vector types (XVector) whose
+   pointer-to-vector is NOT registered in swig_type_initial[] (SWIG
+   only adds pointer types referenced via $descriptor in a wrapper
+   signature; std::vector<M>* is rarely such -- vectors flow as values
+   from from_ptr<vec<M>> via this helper).  Mirrors the body of
+   SWIG_WASMJS_NewPointerObj's clientdata branch. */
+SWIGRUNTIME EM_VAL SWIG_WASMJS_WrapByName(void *ptr, const char *js_name) {
+  if (!ptr) return 0;
+  if (js_name) {
+    std::string attr = "__wrap_";
+    attr += js_name;
+    emscripten::val wrap = emscripten::val::module_property(attr.c_str());
+    if (!wrap.isUndefined() && !wrap.isNull()) {
+      emscripten::val proxy = wrap(emscripten::val(reinterpret_cast<uintptr_t>(ptr)));
+      return proxy.release_ownership();
+    }
+  }
+  emscripten::val obj = emscripten::val::object();
+  obj.set("_ptr", emscripten::val(reinterpret_cast<uintptr_t>(ptr)));
+  return obj.release_ownership();
+}
 
 /* Stubs for SwigModule machinery referenced by swigrun.swg when
    SWIG_MODULE_CLIENTDATA_TYPE is defined. */
