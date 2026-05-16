@@ -185,13 +185,24 @@ SWIG_WASMJS_ConvertPtr(EM_VAL obj, void **pptr, swig_type_info *type, int flags)
 /* Wrap a raw C++ pointer in a fully-typed JS proxy instance.
    When `type->clientdata` is non-null (set by SWIG_WASMJS_init_cast_chains
    to the JS class name, e.g. "MX"), call back into JS via
-   `M.__wrap_<JsName>(ptr)` -- which does `new JsName(__PRIVATE_CTOR, ptr)`
-   -- to produce a real proxy with `_swig_type` on the prototype.  Mirrors
-   matlabrun.swg::SWIG_Matlab_NewPointerObj's mexCallMATLAB("<Class>_construct",...)
+   `M.__wrap_<JsName>(ptr, owns)` -- which does
+   `new JsName(__PRIVATE_CTOR, ptr, owns)` -- to produce a real proxy
+   with `_swig_type` on the prototype.  Mirrors matlabrun.swg::
+   SWIG_Matlab_NewPointerObj's mexCallMATLAB("<Class>_construct",...)
    call.  Falls back to a bare `{_ptr}` carrier when clientdata is unset
-   (untyped pointers, types without a registered class). */
+   (untyped pointers, types without a registered class).
+
+   The `owns` boolean (derived from SWIG_POINTER_OWN) tells the proxy
+   whether JS is responsible for calling SWIG_<C>_delete on GC.  Value
+   returns ("SwigValueWrapper<T>" path -- `new T(result)` heap-clones)
+   pass SWIG_POINTER_OWN; pointer/ref returns that share C++-internal
+   storage pass 0.  The proxy's PRIVATE_CTOR branch FR-registers only
+   when owns=1.  Without this, owning proxies leaked (every
+   `f.call()`, `opti.solve()`, `vertcat(...)` etc. orphaned its heap
+   wrapper).  Mirrors python.cxx's SwigPyObject.own and matlab.cxx's
+   SwigPtr.own. */
 SWIGRUNTIME EM_VAL
-SWIG_WASMJS_NewPointerObj(void *ptr, swig_type_info *type, int SWIGUNUSEDPARM(flags)) {
+SWIG_WASMJS_NewPointerObj(void *ptr, swig_type_info *type, int flags) {
   if (!ptr) return 0;
   if (type && type->clientdata) {
     const char *js_name = (const char *)type->clientdata;
@@ -199,7 +210,10 @@ SWIG_WASMJS_NewPointerObj(void *ptr, swig_type_info *type, int SWIGUNUSEDPARM(fl
     attr += js_name;
     emscripten::val wrap = emscripten::val::module_property(attr.c_str());
     if (!wrap.isUndefined() && !wrap.isNull()) {
-      emscripten::val proxy = wrap(emscripten::val(reinterpret_cast<uintptr_t>(ptr)));
+      int owns = (flags & SWIG_POINTER_OWN) ? 1 : 0;
+      emscripten::val proxy = wrap(
+        emscripten::val(reinterpret_cast<uintptr_t>(ptr)),
+        emscripten::val(owns));
       return proxy.release_ownership();
     }
   }
@@ -279,6 +293,8 @@ SWIGRUNTIME swig_type_info* SWIG_WASMJS_LookupByJsName(const char* js_name);
    signature; std::vector<M>* is rarely such -- vectors flow as values
    from from_ptr<vec<M>> via this helper).  Mirrors the body of
    SWIG_WASMJS_NewPointerObj's clientdata branch. */
+/* Caller always passes a heap-allocated `ptr` (the from_ptr<vec<M>>
+   template uses `new std::vector<M>(*a)`), so owns=1 is hard-coded. */
 SWIGRUNTIME EM_VAL SWIG_WASMJS_WrapByName(void *ptr, const char *js_name) {
   if (!ptr) return 0;
   if (js_name) {
@@ -286,7 +302,9 @@ SWIGRUNTIME EM_VAL SWIG_WASMJS_WrapByName(void *ptr, const char *js_name) {
     attr += js_name;
     emscripten::val wrap = emscripten::val::module_property(attr.c_str());
     if (!wrap.isUndefined() && !wrap.isNull()) {
-      emscripten::val proxy = wrap(emscripten::val(reinterpret_cast<uintptr_t>(ptr)));
+      emscripten::val proxy = wrap(
+        emscripten::val(reinterpret_cast<uintptr_t>(ptr)),
+        emscripten::val(1));
       return proxy.release_ownership();
     }
   }

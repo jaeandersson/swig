@@ -2483,8 +2483,15 @@ int WASM_JS::top(Node *n) {
     while (cit.key) {
       String *js_cn = (String *)cit.item;
       if (js_cn && Strncmp(js_cn, "__dummy_", 8) != 0) {
+        /* `owns` arg threaded through from SWIG_WASMJS_NewPointerObj:
+           1 if the C++ caller passed SWIG_POINTER_OWN (value returns,
+           heap-cloned via `new T(result)`), 0 for borrowed returns
+           (references to internal storage).  The ctor's PRIVATE_CTOR
+           branch FR-registers only when owns=1.  Without this, owning
+           returns leak; without the borrow-skip, borrowed returns
+           double-free. */
         Printf(f_js_classes,
-          "  M.__wrap_%s = (p) => new %s(__PRIVATE_CTOR, p);\n",
+          "  M.__wrap_%s = (p, owns) => new %s(__PRIVATE_CTOR, p, owns);\n",
           js_cn, js_cn);
       }
       cit = Next(cit);
@@ -2874,17 +2881,24 @@ int WASM_JS::classHandler(Node *n) {
      `self conversion failed`. */
   if (Len(ctor_overloads) == 0) {
     String *cmangle = mangle(cname);
+    /* PRIVATE_CTOR (called from M.__wrap_<C>(ptr, owns)) sets _ptr
+       and, when owns=1, registers in __fr_<C>.  Super-call uses
+       owns=0 so only the MOST-DERIVED class's FR fires (the
+       virtual-dtor wrapper handles the full destruction chain);
+       letting every base also register would double-free. */
     Printf(class_js_body,
       "    constructor(...args) {\n"
       "      if (args[0] === __PRIVATE_CTOR) {\n"
       "        %s\n"
+      "        if (args[2]) __fr_%s.register(this, args[1], this);\n"
       "        return;\n"
       "      }\n"
       "      throw new Error(`%s: abstract base, no public constructor`);\n"
       "    }\n",
       class_has_base
-        ? "super(__PRIVATE_CTOR, args[1]);"
+        ? "super(__PRIVATE_CTOR, args[1], 0);"
         : "this._ptr = args[1];",
+      cmangle,
       class_jsname);
     Delete(cmangle);
   }
@@ -2898,12 +2912,21 @@ int WASM_JS::classHandler(Node *n) {
     String *cmangle = mangle(cname);
     String *ctor_js = NewString("");
     Printf(ctor_js, "    constructor(...args) {\n");
+    /* PRIVATE_CTOR called from M.__wrap_<C>(ptr, owns): set _ptr and
+       FR-register when owns=1 (ownership-flag wiring -- see
+       wasm_jsrun.swg::SWIG_WASMJS_NewPointerObj).  Super-call uses
+       owns=0 so only this (most-derived) class's FR fires; letting
+       every base register would double-free via virtual dtor. */
     if (class_has_base) {
       Printf(ctor_js,
-        "      if (args[0] === __PRIVATE_CTOR) { super(__PRIVATE_CTOR, args[1]); return; }\n");
+        "      if (args[0] === __PRIVATE_CTOR) { super(__PRIVATE_CTOR, args[1], 0); "
+        "if (args[2]) __fr_%s.register(this, args[1], this); return; }\n",
+        cmangle);
     } else {
       Printf(ctor_js,
-        "      if (args[0] === __PRIVATE_CTOR) { this._ptr = args[1]; return; }\n");
+        "      if (args[0] === __PRIVATE_CTOR) { this._ptr = args[1]; "
+        "if (args[2]) __fr_%s.register(this, args[1], this); return; }\n",
+        cmangle);
     }
     /* Phase 4.3: director subclass detection.  If a JS user subclasses
        a director-marked class (e.g. `class MyCB extends Callback`), we
