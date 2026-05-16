@@ -39,6 +39,27 @@
 #include <string>
 %}
 
+// SWIG-level director-fail macros.  Expanded by SWIG into the typemap
+// body when a `directorin` / `directorout` body uses `%dirout_fail(...)`.
+// Matches the definitions in `<typemaps/swigtypemaps.swg>` (which we don't
+// %include because it would also drag in generic SWIGTYPE directorin/out
+// bodies targeting mxArray/PyObject signatures).  Calls `SWIG_DirOutFail` /
+// `SWIG_ErrorType` from `Lib/wasm_js/wasm_jsrun.swg`.
+#define %outfail_fmt(_type)            "in output value of type '"_type"'"
+#define %outnullref_fmt(_type)         "null reference " %outfail_fmt(_type)
+#define %default_code(code)            SWIG_ArgError(code)
+#define %dirout_fail(code, type)       SWIG_DirOutFail(%default_code(code), %outfail_fmt(type))
+#define %dirout_nullref(type)          SWIG_DirOutFail(SWIG_NullReferenceError, %outnullref_fmt(type))
+
+// SWIG_ArgError default: identity passthrough (matches the matlab/python pattern
+// when no per-arg numbering is needed).  Wrap in #ifndef so user .i files can
+// override.
+%insert("header") %{
+#ifndef SWIG_ArgError
+#define SWIG_ArgError(r)   (r)
+#endif
+%}
+
 // Pull in the SWIG runtime: swigrun.swg (swig_type_info etc.) +
 // swigerrors.swg + wasm_jsrun.swg (SWIG_ConvertPtr / SWIG_NewPointerObj
 // as identity casts).  The runtime block is emitted before the wrappers
@@ -62,6 +83,14 @@ _argouts[_argout_idx++] = (void*)(X);
 // unconditionally so casadi.i's %stub_alias_in / %stub_method calls
 // don't error out.
 %include <wasm_jsuserdir.swg>
+
+// %jscode -- target-language code-injection alias, mirroring
+// `%pythoncode` / `%matlabcode`.  Routes to the global %insert("js")
+// slot today; see wasm_js.cxx's TODO about wiring it inside %extend
+// blocks so a future `%extend Foo { %jscode %{ ... %} }` lands in the
+// emitted class body.  For now the syntactic alias still helps users
+// `grep` and conveys intent at the .i level.
+#define %jscode  %insert("js")
 
 // Pull in fragment-name machinery and primitive AsVal/From stubs so that
 // casadi.i's `%fragment("casadi_bool", "header", fragment=SWIG_AsVal_frag(bool))`
@@ -197,3 +226,73 @@ _argouts[_argout_idx++] = (void*)(X);
 // templates (which delegate to SWIG_ConvertPtr / SWIG_NewPointerObj),
 // plus `%wasm_vec(T, NAME)` above for the JS-side Array <-> XVector
 // autoconversion typemaps.)
+
+
+// ============================================================================
+// Director (C++ <-> JS) typemaps for primitives.
+// ============================================================================
+//
+// Wire contract enforced by wasm_js.cxx::classDirectorMethod:
+//
+//   directorin body  : ASSIGNS to `$input` (an `EM_VAL` local declared by
+//                      the language module) from `$1` (the C++ value).
+//                      Produce the EM_VAL via `emscripten::val::release_ownership()`.
+//
+//   directorout body : READS `$input` (an `EM_VAL` released from the
+//                      JS return val) and ASSIGNS `$result` (a C++ local
+//                      declared by the language module via SwigType_lstr).
+//                      Wrap with `emscripten::val::take_ownership($input)`
+//                      to operate on it as an emscripten::val.
+//
+// Casadi value types (DM/MX/SX/Sparsity/Function/vector<X>) get per-type
+// directorin/directorout typemaps in casadi.i so the JS side receives
+// proper proxy class instances (via M.__wrap_<C>) instead of raw {_ptr}
+// carriers.
+
+%typemap(directorin) bool %{
+  $input = emscripten::val(static_cast<bool>($1)).release_ownership();
+%}
+%typemap(directorout) bool %{
+  $result = emscripten::val::take_ownership($input).as<bool>();
+%}
+
+%typemap(directorin) int, long, long long, unsigned int, unsigned long, unsigned long long %{
+  $input = emscripten::val(static_cast<double>($1)).release_ownership();
+%}
+// JS callers may return either a Number (5) or a BigInt (5n) for
+// integer-typed virtuals.  Probe typeOf and dispatch -- embind rejects
+// mismatched wire types if we pick the wrong one.
+%typemap(directorout) int, long, long long, unsigned int, unsigned long, unsigned long long %{
+  {
+    emscripten::val __v = emscripten::val::take_ownership($input);
+    if (__v.typeOf().as<std::string>() == "bigint") {
+      $result = static_cast<$1_ltype>(__v.as<long long>());
+    } else {
+      $result = static_cast<$1_ltype>(__v.as<double>());
+    }
+  }
+%}
+// SWIG normally typedef-resolves before matching, so the long-long
+// patterns above should already pick up casadi_int (= long long).
+// Register explicitly anyway: makes intent obvious and immunises us
+// against config builds that redefine CASADI_INT_TYPE.
+%typemap(directorin) casadi_int %{
+  $input = emscripten::val(static_cast<double>($1)).release_ownership();
+%}
+%typemap(directorout) casadi_int %{
+  {
+    emscripten::val __v = emscripten::val::take_ownership($input);
+    if (__v.typeOf().as<std::string>() == "bigint") {
+      $result = static_cast<casadi_int>(__v.as<long long>());
+    } else {
+      $result = static_cast<casadi_int>(__v.as<double>());
+    }
+  }
+%}
+
+%typemap(directorin) std::string, const std::string& %{
+  $input = emscripten::val(std::string($1)).release_ownership();
+%}
+%typemap(directorout) std::string %{
+  $result = emscripten::val::take_ownership($input).as<std::string>();
+%}

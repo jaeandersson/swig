@@ -223,6 +223,36 @@ EMSCRIPTEN_BINDINGS(swig_wasmjs_runtime) {
   emscripten::function("__swig_release_handle", &swig_wasmjs_release_handle);
 }
 
+/* SWIG_ErrorType + SWIG_DirOutFail: dependencies of `%dirout_fail`, which
+   the standard directorin/directorout typemap bodies (see casadi.i's
+   `%casadi_input_typemaps` / `%casadi_output_typemaps`) expand to.
+   Matches the body matlab/python use, just with our own DirectorTypeMismatchException
+   declared in `Lib/wasm_js/director.swg`.  We define these in the runtime
+   header (rather than %include-ing `<typemaps/swigtypemaps.swg>`) so the
+   wasm-js target stays lean -- the standard SWIGTYPE directorin/out bodies
+   in swigtypemaps.swg target generic mxArray/PyObject signatures and we'd
+   have to override most of them anyway. */
+SWIGRUNTIME const char* SWIG_ErrorType(int code) {
+  switch (code) {
+    case SWIG_MemoryError:      return "SWIG:MemoryError";
+    case SWIG_IOError:          return "SWIG:IOError";
+    case SWIG_RuntimeError:     return "SWIG:RuntimeError";
+    case SWIG_IndexError:       return "SWIG:IndexError";
+    case SWIG_TypeError:        return "SWIG:TypeError";
+    case SWIG_DivisionByZero:   return "SWIG:DivisionByZero";
+    case SWIG_OverflowError:    return "SWIG:OverflowError";
+    case SWIG_SyntaxError:      return "SWIG:SyntaxError";
+    case SWIG_ValueError:       return "SWIG:ValueError";
+    case SWIG_SystemError:      return "SWIG:SystemError";
+    case SWIG_AttributeError:   return "SWIG:AttributeError";
+    case SWIG_NullReferenceError: return "SWIG:NullReferenceError";
+    default:                    return "SWIG:UnknownError";
+  }
+}
+
+#define SWIG_DirOutFail(code, msg) \
+  Swig::DirectorTypeMismatchException::raise(SWIG_ErrorType(code), msg)
+
 /* Stubs for SwigModule machinery referenced by swigrun.swg when
    SWIG_MODULE_CLIENTDATA_TYPE is defined. */
 static swig_module_info swig_wasmjs_module = { 0, 0, 0, 0, 0, 0 };
