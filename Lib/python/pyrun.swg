@@ -2077,7 +2077,16 @@ SWIG_Python_ArgsTypeDesc(PyObject* args, PyObject** bytes) {
   if (!dict) return res_char;
   PyObject* fun = PyDict_GetItemString(dict, (char*)"swigtypeconvertor");
   if (fun && PyCallable_Check(fun)) {
+    /* Python 3.13+ asserts that PyObject_CallObject is not invoked with
+       a pending exception. This helper is called from the fail: block of
+       SWIG overloaded-function dispatchers, where the failed to_ptr probes
+       have already set a NotImplementedError. Save and restore that error
+       around the call so we satisfy the assertion without losing the
+       dispatcher's pending exception. */
+    PyObject *exc_type = NULL, *exc_value = NULL, *exc_tb = NULL;
+    PyErr_Fetch(&exc_type, &exc_value, &exc_tb);
     PyObject* res = PyObject_CallObject(fun, args);
+    if (exc_type) PyErr_Restore(exc_type, exc_value, exc_tb);
     if (!res) return res_char;
     PyObject* res_str = PyObject_Repr(res);
     if (!res_str) { Py_DECREF(res); return res_char;}
