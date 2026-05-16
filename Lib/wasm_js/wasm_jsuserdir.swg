@@ -49,6 +49,23 @@
 %}
 %enddef
 
+/* TS-side input/output alias registration.  Each `%ts_alias_in(NAME)`
+   adds one identifier to the slot the d.ts emitter consumes; bare
+   `NAME` tokens in tsstub_in expressions get rewritten to `_NAME`
+   (matching the `export type _NAME = ...` declarations the user
+   places in `%insert("stubs")`).  ts_alias_out is the same idea for
+   output-position rewrites, used for types whose runtime marshaling
+   unwraps to a primitive regardless of direction. */
+%define %ts_alias_in(NAME)
+%insert("ts_alias_in") %{NAME
+%}
+%enddef
+
+%define %ts_alias_out(NAME)
+%insert("ts_alias_out") %{NAME
+%}
+%enddef
+
 /* Hand-written python-syntax stubs: skip under wasm_js.  TypeScript
    counterparts could be added later via a wasm-js-specific macro
    family (`%dts_method` etc.). */
@@ -71,6 +88,8 @@
 %define %stub_alias_out(NAME, TYPES...) %enddef
 %define %stub_alias_in_key(KEY, TYPES...) %enddef
 %define %stub_alias_out_key(KEY, TYPES...) %enddef
+%define %ts_alias_in(NAME) %enddef
+%define %ts_alias_out(NAME) %enddef
 %define %stub_method(NAME, RET, ARGS...) %enddef
 %define %stub_method0(NAME, RET) %enddef
 %define %stub_overload_method(NAME, RET, ARGS...) %enddef

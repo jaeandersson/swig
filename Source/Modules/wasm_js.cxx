@@ -61,6 +61,8 @@ public:
       member_overloads(0),
       stub_free_fn_buckets(0),
       stub_free_fn_order(0),
+      ts_alias_in_set(0),
+      ts_alias_out_set(0),
       class_has_base(false) {
     /* Phase 4.3: director-language support active.  Lib/wasm_js/director.swg
        provides Swig::Director (EM_VAL handle holder) + exception classes.
@@ -1395,23 +1397,66 @@ protected:
     return cpp;  /* class name, hopefully matching the emitted JS proxy */
   }
 
-  /* Rewrite bare class-name identifiers in a TS type expression to their
-     `_X` coercion-union aliases (for INPUT positions).  Mirrors python.cxx
-     `resolveStub`: walk the string, replace each identifier token by its
-     alias when present, leave punctuation alone.  Drives the same set
-     of typed-input conveniences the Python pyi exposes via _DM/_SX/_MX.
+  /* Rewrite bare class-name identifiers in a TS type expression to
+     their `_X` coercion-union aliases.  Walk the string, replace each
+     identifier token by its alias when present, leave punctuation
+     alone.  Mirrors python.cxx `resolveStub`.
 
-     The alias set is hardcoded to match the `export type _<X> = ...`
-     block emitted by casadi.i.  Keep these two lists in sync. */
-  String *ts_apply_in_aliases(const String *expr) {
+     The alias set is built per call by draining `%insert` slots that
+     user .i files populate -- wasm_js.cxx itself stays casadi-
+     agnostic: it knows NOTHING about DM / SX / GenericType / etc.
+     casadi.i populates the alias tables via `%insert("ts_alias_in")`
+     and `%insert("ts_alias_out")` lines of the form `NAME\n` (one
+     identifier per line).  See `%ts_alias_in` / `%ts_alias_out` macros
+     in casadi.i. */
+  Hash *ts_alias_in_set;
+  Hash *ts_alias_out_set;
+
+  /* Drain a `%insert("ts_alias_in")` / `%insert("ts_alias_out")` buffer
+     into the named hash.  Each non-blank, non-`#` line contributes one
+     identifier whose value gets rewritten to `_<identifier>` when seen
+     in a tsstub_* string.  Idempotent: after drain the buffer is
+     cleared so subsequent calls are no-ops. */
+  void ts_drain_alias_slot(const char *slot, Hash **dst) {
+    if (!*dst) *dst = NewHash();
+    File *f = Swig_filebyname(NewString(slot));
+    if (!f || Len((String *)f) == 0) return;
+    String *s = (String *)f;
+    const char *c = Char(s);
+    int n = Len(s);
+    int start = 0;
+    for (int i = 0; i <= n; ++i) {
+      if (i == n || c[i] == '\n') {
+        /* Trim leading whitespace; skip blank / comment lines. */
+        const char *ls = c + start;
+        const char *le = c + i;
+        while (ls < le && (*ls == ' ' || *ls == '\t')) ++ls;
+        if (ls < le && *ls != '#') {
+          /* First whitespace-delimited token is the identifier. */
+          const char *e = ls;
+          while (e < le && *e != ' ' && *e != '\t') ++e;
+          if (e > ls) {
+            String *ident = NewStringWithSize(ls, e - ls);
+            Setattr(*dst, ident, "1");
+            Delete(ident);
+          }
+        }
+        start = i + 1;
+      }
+    }
+    Clear(s);  /* idempotent */
+  }
+
+  String *ts_apply_aliases(const String *expr, bool is_output) {
     if (!expr || Len(expr) == 0) return NewString("any");
-    static const char *kAliases[] = {
-      "DM", "SX", "MX", "IM", "SXElem", "Slice", "GenericType", "MIndex", 0
-    };
-    /* Build a set for fast membership. */
-    Hash *alias_set = NewHash();
-    for (int i = 0; kAliases[i]; ++i) {
-      Setattr(alias_set, kAliases[i], "1");
+    /* Lazy-drain on every call so user .i files can populate the slot
+       after the first stub emission. */
+    ts_drain_alias_slot("ts_alias_in",  &ts_alias_in_set);
+    ts_drain_alias_slot("ts_alias_out", &ts_alias_out_set);
+    Hash *alias_set = is_output ? ts_alias_out_set : ts_alias_in_set;
+    if (!alias_set || Len(alias_set) == 0) {
+      /* Empty alias set -- pass through verbatim. */
+      return Copy(expr);
     }
     String *out = NewString("");
     const char *s = Char((String *)expr);
@@ -1435,7 +1480,6 @@ protected:
         i++;
       }
     }
-    Delete(alias_set);
     return out;
   }
 
@@ -1466,12 +1510,9 @@ protected:
         base = NewString("any");
       }
     }
-    if (!is_output) {
-      String *widened = ts_apply_in_aliases(base);
-      Delete(base);
-      return widened;
-    }
-    return base;
+    String *widened = ts_apply_aliases(base, is_output);
+    Delete(base);
+    return widened;
   }
 
   /* Emit a TypeScript signature line for one (overload of a) function-like
@@ -1524,9 +1565,18 @@ protected:
     Parm *pj = Getattr(source, "wrap:parms");
     if (!pj) pj = Getattr(source, "parms");
     /* Attach `in` typemap to populate tmap:in:pystub_in / pystub_out
-       attributes pick_ts_stub() reads.  Idempotent.  Also "out" for
-       reading tmap:out:pystub_out on the return type. */
-    if (pj) Swig_typemap_attach_parms("in", pj, 0);
+       attributes pick_ts_stub() reads.  Idempotent.  Also `argout` so
+       we can detect output-by-reference parms and promote them into
+       the return type (the `&OUTPUT` / `SWIG_OUTPUT` convention used
+       by Function::call etc.). */
+    if (pj) {
+      Swig_typemap_attach_parms("in", pj, 0);
+      Swig_typemap_attach_parms("argout", pj, 0);
+    }
+    /* Collect TS types for `argout` parms (output-by-reference).  These
+       contribute to the return type, not the input list.  Matches
+       python.cxx's `out_types` accumulator. */
+    List *argout_ts = NewList();
     /* Detect duplicate parm names so we can rename collisions to
        _arg<N>.  Common with overload-typemap parms that share a name
        (`xType &INOUT` -> all named "INOUT" after typemap apply). */
@@ -1541,7 +1591,16 @@ protected:
     int auto_idx = 0;
     while (pj) {
       bool is_input = !checkAttribute(pj, "tmap:in:numinputs", "0");
-      if (is_input) {
+      bool is_argout = Getattr(pj, "tmap:argout") != 0;
+      if (is_argout && !is_input) {
+        /* Pure output (numinputs=0): contributes to return type only.
+           Read tsstub_out from the parm's IN typemap (the &OUTPUT
+           variant carries tsstub_out= on its `in` typemap, NOT the
+           `out` one, per casadi.i convention).  Fall back to ts_in
+           if no out-form available. */
+        String *resolved = pick_ts_stub(pj, true);
+        Append(argout_ts, resolved);
+      } else if (is_input) {
         String *pname = Getattr(pj, "name");
         if (!pname) pname = Getattr(pj, "lname");
         bool is_self = pname && Strcmp(pname, "self") == 0;
@@ -1582,6 +1641,11 @@ protected:
           Printv(f, ": ", ts, NIL);
           Delete(ts);
           first = false;
+          if (is_argout) {
+            /* INOUT: input AND contributes to return. */
+            String *resolved = pick_ts_stub(pj, true);
+            Append(argout_ts, resolved);
+          }
         }
       }
       auto_idx++;
@@ -1596,17 +1660,13 @@ protected:
     } else {
       Printv(f, "): ", NIL);
       bool is_void = checkAttribute(source, "type", "void");
-      if (is_void) {
-        Printv(f, "void", NIL);
-      } else {
-        /* tsstub_out is populated by casadi.i's xTsStub macro arg.
-           wasm_js writes its own C-wrapper (build_wrapper_body) and
-           attaches the `out` typemap to a fake parm there, not to `n`.
-           Stub emission runs BEFORE that path, so `n` has no
-           tmap:out:* attrs.  Attach an `out` typemap to a temp parm
-           with the source's return type, then read tsstub_out from
-           the parm.  Matches python.cxx's lookup pattern but without
-           the side effect of running emission. */
+      int n_argout = Len(argout_ts);
+      /* Resolve the natural return type (or "void").  Run the result
+         through ts_apply_aliases(is_output=true) so types whose runtime
+         marshaling unwraps to a JS primitive (e.g. GenericType)
+         render as their `_<name>` union form on output too. */
+      String *ret_ts = 0;
+      if (!is_void) {
         SwigType *rt = Getattr(source, "type");
         String *po = 0;
         Parm *out_fake = 0;
@@ -1616,23 +1676,48 @@ protected:
           Swig_typemap_attach_parms("out", out_fake, 0);
           po = Getattr(out_fake, "tmap:out:tsstub_out");
         }
+        String *raw = 0;
         if (po && Len(po) > 0) {
-          Printv(f, po, NIL);
+          raw = Copy(po);
         } else {
-          /* Final fallback: render the SwigType name through cpp_to_ts. */
           String *sname = rt ? SwigType_str(rt, 0) : 0;
           if (sname) {
-            String *ts = cpp_to_ts(sname);
-            Printv(f, ts, NIL);
-            Delete(sname); Delete(ts);
+            raw = cpp_to_ts(sname);
+            Delete(sname);
           } else {
-            Printv(f, "any", NIL);
+            raw = NewString("any");
           }
         }
+        ret_ts = ts_apply_aliases(raw, true);
+        Delete(raw);
         if (out_fake) Delete(out_fake);
       }
+      /* Aggregate (natural return, argout[0], argout[1], ...) into the
+         TS return type.  0 things → void; 1 thing → bare; >1 → tuple. */
+      int total = (is_void ? 0 : 1) + n_argout;
+      if (total == 0) {
+        Printv(f, "void", NIL);
+      } else if (total == 1) {
+        if (!is_void) Printv(f, ret_ts, NIL);
+        else Printv(f, (String *)Getitem(argout_ts, 0), NIL);
+      } else {
+        Printv(f, "[", NIL);
+        bool first_ret = true;
+        if (!is_void) {
+          Printv(f, ret_ts, NIL);
+          first_ret = false;
+        }
+        for (int i = 0; i < n_argout; ++i) {
+          if (!first_ret) Printv(f, ", ", NIL);
+          Printv(f, (String *)Getitem(argout_ts, i), NIL);
+          first_ret = false;
+        }
+        Printv(f, "]", NIL);
+      }
+      if (ret_ts) Delete(ret_ts);
       Printv(f, ";\n", NIL);
     }
+    Delete(argout_ts);
   }
 
   /* Read the maximum typecheck precedence across the parms of one
@@ -1759,15 +1844,18 @@ protected:
       Swig_typemap_attach_parms("out", out_fake, 0);
       po = Getattr(out_fake, "tmap:out:tsstub_out");
     }
+    String *raw = 0;
     if (po && Len(po) > 0) {
-      ts = Copy(po);
+      raw = Copy(po);
     } else if (t) {
       String *sname = SwigType_str(t, 0);
-      ts = cpp_to_ts(sname);
+      raw = cpp_to_ts(sname);
       Delete(sname);
     } else {
-      ts = NewString("any");
+      raw = NewString("any");
     }
+    ts = ts_apply_aliases(raw, true);
+    Delete(raw);
     Printv(f_stubs, indent, symname, ": ", ts, ";\n", NIL);
     if (out_fake) Delete(out_fake);
     Delete(ts);
@@ -2458,10 +2546,21 @@ int WASM_JS::top(Node *n) {
     Swig_register_filebyname("stubs_alias_in_table",  f_alias_in);
     Swig_register_filebyname("stubs_alias_out_table", f_alias_out);
     Swig_register_filebyname("stubs_preamble",        f_preamble);
+    /* TS-side alias slots: identifier names rewritten to `_<name>` at
+       the corresponding stub-position by ts_apply_aliases().  Casadi-
+       side (or any other user .i) drives this via the
+       %ts_alias_in / %ts_alias_out macros in
+       Lib/wasm_js/wasm_jsuserdir.swg. */
+    String *f_ts_alias_in  = NewString("");
+    String *f_ts_alias_out = NewString("");
+    Swig_register_filebyname("ts_alias_in",  f_ts_alias_in);
+    Swig_register_filebyname("ts_alias_out", f_ts_alias_out);
     /* Stash for top()-end retrieval. */
     Setattr(n, "wasm_js:f_stubs_alias_in",  f_alias_in);
     Setattr(n, "wasm_js:f_stubs_alias_out", f_alias_out);
     Setattr(n, "wasm_js:f_stubs_preamble",  f_preamble);
+    Setattr(n, "wasm_js:f_ts_alias_in",  f_ts_alias_in);
+    Setattr(n, "wasm_js:f_ts_alias_out", f_ts_alias_out);
   }
 
   f_cpp_runtime  = NewString("");
