@@ -3191,14 +3191,43 @@ int WASM_JS::classHandler(Node *n) {
       }
       Delete(secondary);
     }
-    Printv(saved_stubs, "export class ", class_jsname, base_clause_ts, " {\n",
+    /* Emit each class in callable+newable form so the d.ts matches
+       the casadi.js runtime, which wraps every class export in
+         `new Proxy(C, { apply(t, _self, a) { return Reflect.construct(t, a); }})`
+       so `M.DM(x)` works just like `new M.DM(x)`.  Plain
+       `export class DM` renders as new-only and breaks JS test code
+       (and Python-port idioms) that omit `new`.
+
+       Emission per class <Name>:
+         declare class <Name>__class extends <Base> { ... }
+         export interface <Name>__class extends <SecondaryBases...> {}
+         export type <Name> = <Name>__class;
+         export const <Name>: typeof <Name>__class
+                            & { (...args: any[]): <Name>__class };
+
+       `type <Name>` preserves the instance-type alias (`const x:
+       <Name>` still resolves to a class instance).  `const <Name>`
+       provides BOTH the constructor type (via `typeof <Name>__class`
+       which carries `new (...)` sigs AND statics) AND a plain call
+       signature for the bare-`<Name>(x)` form.  Interface
+       declaration-merging still works -- it merges into
+       `<Name>__class`, the underlying class identity. */
+    /* `export declare class` + `export interface` for declaration-
+       merge: TS requires both halves to share `export` modifiers
+       (TS2395 otherwise).  `export declare const` for the value
+       (initializerless, ambient). */
+    Printv(saved_stubs, "export declare class ", class_jsname, "__class", base_clause_ts, " {\n",
                        f_stubs_class_body,
                        "}\n",
                        NIL);
     if (iface_clause_ts) {
-      Printv(saved_stubs, "export interface ", class_jsname, iface_clause_ts, " {}\n", NIL);
+      Printv(saved_stubs, "export interface ", class_jsname, "__class", iface_clause_ts, " {}\n", NIL);
       Delete(iface_clause_ts);
     }
+    Printv(saved_stubs, "export type ", class_jsname, " = ", class_jsname, "__class;\n", NIL);
+    Printv(saved_stubs, "export declare const ", class_jsname,
+                       ": typeof ", class_jsname, "__class",
+                       " & { (...args: any[]): ", class_jsname, "__class };\n", NIL);
     Printv(saved_stubs, "\n", NIL);
     Delete(base_clause_ts);
     Delete(f_stubs_class_body); f_stubs_class_body = 0;
