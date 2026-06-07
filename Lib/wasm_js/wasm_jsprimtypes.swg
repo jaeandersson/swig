@@ -32,6 +32,7 @@
 #endif
 
 #include <emscripten/val.h>
+#include <type_traits>
 %}
 
 /* Phase 3.4: EM_VAL-aware primitive coercion.  `p` is an EM_VAL cast to
@@ -48,12 +49,18 @@ SWIGINTERN int SWIG_AsVal_dec(T)(void* p, T* val) {
       reinterpret_cast< ::emscripten::EM_VAL >(p));
   std::string ty = v.typeOf().as<std::string>();
   bool ok = (ty == "number" || ty == "bigint");
-  if (ok && val) {
-    if (ty == "bigint") {
-      emscripten::val nv = emscripten::val::global("Number")(v);
-      *val = static_cast< T >(nv.as<double>());
-    } else {
-      *val = v.as< T >();
+  if (ok) {
+    double d = (ty == "bigint")
+      ? emscripten::val::global("Number")(v).as<double>()
+      : v.as<double>();
+    /* For integer targets, reject a non-integral source so overload /
+       GenericType dispatch falls through to a floating-point candidate
+       (e.g. ipopt.tol=1e-6 must become double, not casadi_int 0). */
+    if (std::is_integral< T >::value &&
+        d != static_cast<double>(static_cast<long long>(d))) {
+      ok = false;
+    } else if (val) {
+      *val = static_cast< T >(d);
     }
   }
   v.release_ownership();
@@ -85,11 +92,12 @@ SWIGINTERN int SWIG_AsVal_dec(bool)(void* p, bool* val) {
   emscripten::val v = emscripten::val::take_ownership(
       reinterpret_cast< ::emscripten::EM_VAL >(p));
   std::string ty = v.typeOf().as<std::string>();
-  bool ok = (ty == "boolean" || ty == "number" || ty == "bigint");
-  if (ok && val) {
-    if (ty == "boolean") *val = v.as<bool>();
-    else                 *val = v.as<double>() != 0.0;
-  }
+  /* Strict: only a real JS boolean is a bool.  Numbers must NOT
+     masquerade as bool, else GenericType dispatch picks OT_BOOL for
+     numeric options (ipopt.max_iter -> true -> 1) and overload dispatch
+     lets Slice(int,bool) shadow Slice(int,int). */
+  bool ok = (ty == "boolean");
+  if (ok && val) *val = v.as<bool>();
   v.release_ownership();
   return ok ? SWIG_OK : SWIG_ERROR;
 }

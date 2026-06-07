@@ -53,6 +53,7 @@ public:
       mangle_to_jsname(0),
       cpp_to_js_vector_class(0),
       is_vector_jsname(0),
+      indexed_classes(0),
       js_to_cpp_canonical(0),
       classes_needing_probes(0),
       types_needing_typecheck_probes(0),
@@ -281,6 +282,11 @@ protected:
                                        O(1) check at dispatcher-emit time
                                        vs the linear scan over
                                        cpp_to_js_vector_class values. */
+  Hash   *indexed_classes;         /* JS class name -> "1" for classes with
+                                       %feature("wasmjs:index") (SX/MX/DM):
+                                       their instances are wrapped in an
+                                       element-indexing Proxy (x[k], x[k]=v,
+                                       x[[i,j]], x["a:b"], x.nz[k]). */
   Hash   *js_to_cpp_canonical;     /* JS class name -> canonical fully-
                                        qualified C++ type string (e.g.
                                        "MX" -> "casadi::MX").  Populated
@@ -388,6 +394,19 @@ protected:
   String *build_arg_check(Parm *q, int pi) {
     SwigType *t = Getattr(q, "type");
     if (!t) return NULL;
+    /* Generic hook: honor a JS typecheck typemap (jstypecheck) defined in
+       the interface file, so the .i -- not this backend -- decides which
+       JS values match a given C++ type (e.g. accept a bare number/array
+       where casadi SX/MX/DM is expected).  $input -> args[pi]. */
+    Swig_typemap_attach_parms("jstypecheck", q, 0);
+    String *jstc = Getattr(q, "tmap:jstypecheck");
+    if (jstc && Len(jstc) > 0) {
+      String *expr = Copy(jstc);
+      String *idx = NewStringf("args[%d]", pi);
+      Replaceall(expr, "$input", idx);
+      Delete(idx);
+      return expr;
+    }
     String *cls = lookup_js_class(t);
     if (cls && Len(cls) > 0) {
       register_probe(cls);
@@ -419,8 +438,9 @@ protected:
       int tk = SwigType_type(toinspect);
       String *r = NULL;
       if (tk == T_BOOL) {
-        r = NewStringf("(typeof args[%d] === 'boolean' || typeof args[%d] === 'number')",
-                       pi, pi);
+        /* Strict: a JS number is NOT a bool, so overload dispatch lets
+           Slice(int,int) win over Slice(int, bool ind1) etc. */
+        r = NewStringf("(typeof args[%d] === 'boolean')", pi);
       } else if (tk == T_INT  || tk == T_UINT
               || tk == T_SHORT || tk == T_USHORT
               || tk == T_LONG  || tk == T_ULONG
@@ -2766,9 +2786,14 @@ int WASM_JS::top(Node *n) {
            branch FR-registers only when owns=1.  Without this, owning
            returns leak; without the borrow-skip, borrowed returns
            double-free. */
-        Printf(f_js_classes,
-          "  M.__wrap_%s = (p, owns) => new %s(__PRIVATE_CTOR, p, owns);\n",
-          js_cn, js_cn);
+        if (indexed_classes && Getattr(indexed_classes, js_cn))
+          Printf(f_js_classes,
+            "  M.__wrap_%s = (p, owns) => __mkIndex(new %s(__PRIVATE_CTOR, p, owns));\n",
+            js_cn, js_cn);
+        else
+          Printf(f_js_classes,
+            "  M.__wrap_%s = (p, owns) => new %s(__PRIVATE_CTOR, p, owns);\n",
+            js_cn, js_cn);
       }
       cit = Next(cit);
     }
@@ -3337,103 +3362,72 @@ int WASM_JS::classHandler(Node *n) {
       String *arity_key = ait.key;
       List *grp = (List *)ait.item;
       Printf(ctor_js, "        case %s: {\n", arity_key);
-      /* Emit class-dispatched cases first (more specific), then a
-         single unconditional fallback (if any) last.  Without this
-         ordering the fallback's `break;` short-circuits later
-         class-dispatch checks. */
-      Hash *fallback = 0;
+      /* Emit EVERY overload of this arity, each gated by its own
+         discriminator (class-type probes for class params, ANDed with
+         primitive typeof checks).  A single fully-unconditional overload
+         (no class and no primitive params, e.g. the 0-arg ctor) is the
+         bare fallback, emitted last.  This replaces the old "one fallback
+         per arity" scheme that silently dropped same-arity primitive
+         overloads (e.g. Slice(start,stop) lost to Slice(i,bool)). */
+      Hash *bare = 0;
       for (int i = 0; i < Len(grp); ++i) {
         Hash *e = (Hash *)Getitem(grp, i);
         String *idxs = (String *)Getattr(e, "dispatch_idxs");
         String *clss = (String *)Getattr(e, "dispatch_clss");
+        String *prim = (String *)Getattr(e, "prim_checks");
         String *sw  = (String *)Getattr(e, "swig_name");
         String *call_args = (String *)Getattr(e, "call_args_js");
         String *str_prologue = (String *)Getattr(e, "str_prologue");
         String *str_free     = (String *)Getattr(e, "str_free");
+        String *cond = NewString("");
         if (idxs && Len(idxs) > 0) {
-          /* AND together class checks across ALL class-typed parm
-             positions (matches matlab's overload-dispatch pattern in
-             casadiMATLAB_wrap.cxx: every parm must be convertible to
-             the expected type, else move on to the next overload).
-             First overload whose every position validates wins. */
-          String *cond = NewString("");
           List *idx_list = Split(idxs, ' ', -1);
           List *cls_list = Split(clss, ' ', -1);
-          int n_pos = Len(idx_list);
-          for (int k = 0; k < n_pos; ++k) {
+          for (int k = 0; k < Len(idx_list); ++k) {
             String *idx = (String *)Getitem(idx_list, k);
             String *cls = (String *)Getitem(cls_list, k);
-            if (k > 0) Printv(cond, " && ", NIL);
-            /* Phase 3.3: wasm-side probe per class-typed parm (replaces
-               JS-side __can / __can_vec string compares).  See the
-               arg0-dispatcher block above for design rationale. */
+            if (Len(cond) > 0) Printv(cond, " && ", NIL);
             register_probe(cls);
             Printf(cond, "M._swig_can_%s(__unwrap(args[%s]))", cls, idx);
           }
+          Delete(idx_list); Delete(cls_list);
+        }
+        if (prim && Len(prim) > 0) {
+          if (Len(cond) > 0) Printv(cond, " && ", NIL);
+          Printv(cond, prim, NIL);
+        }
+        if (Len(cond) > 0) {
           if (str_prologue && Len(str_prologue) > 0) {
             Printf(ctor_js,
-              "          if (%s) {\n"
-              "%s"
-              "            __ptr = __chk(M._%s(%s));\n"
-              "%s"
-              "            break;\n"
-              "          }\n",
-              cond, str_prologue, sw, call_args ? Char(call_args) : "", str_free);
+              "          if (%s) {\n%s            __ptr = __chk(M._%s(%s));\n%s            break;\n          }\n",
+              Char(cond), str_prologue, sw, call_args ? Char(call_args) : "", str_free);
           } else {
             Printf(ctor_js,
               "          if (%s) { __ptr = __chk(M._%s(%s)); break; }\n",
-              cond, sw, call_args ? Char(call_args) : "");
+              Char(cond), sw, call_args ? Char(call_args) : "");
           }
-          Delete(cond); Delete(idx_list); Delete(cls_list);
-        } else if (!fallback) {
-          fallback = e;
+        } else if (!bare) {
+          bare = e;   /* fully unconditional; emit once, after the guarded ones */
         }
+        Delete(cond);
       }
-      if (fallback) {
-        String *sw = (String *)Getattr(fallback, "swig_name");
-        String *call_args = (String *)Getattr(fallback, "call_args_js");
-        String *prim = (String *)Getattr(fallback, "prim_checks");
-        String *str_prologue = (String *)Getattr(fallback, "str_prologue");
-        String *str_free     = (String *)Getattr(fallback, "str_free");
-        if (prim && Len(prim) > 0) {
-          /* Gate the fallback on JS-typeof checks so e.g. MX("hello")
-             doesn't silently coerce a string to NaN via the
-             MX(double) wrapper. */
-          if (str_prologue && Len(str_prologue) > 0) {
-            Printf(ctor_js,
-              "          if (%s) {\n"
-              "%s"
-              "            __ptr = __chk(M._%s(%s));\n"
-              "%s"
-              "            break;\n"
-              "          }\n"
-              "          throw new TypeError(`%s: arg-type mismatch at length %s`);\n",
-              Char(prim), str_prologue, sw, call_args ? Char(call_args) : "", str_free,
-              class_jsname, arity_key);
-          } else {
-            Printf(ctor_js,
-              "          if (%s) { __ptr = __chk(M._%s(%s)); break; }\n"
-              "          throw new TypeError(`%s: arg-type mismatch at length %s`);\n",
-              Char(prim), sw, call_args ? Char(call_args) : "",
-              class_jsname, arity_key);
-          }
+      if (bare) {
+        String *sw = (String *)Getattr(bare, "swig_name");
+        String *call_args = (String *)Getattr(bare, "call_args_js");
+        String *str_prologue = (String *)Getattr(bare, "str_prologue");
+        String *str_free     = (String *)Getattr(bare, "str_free");
+        if (str_prologue && Len(str_prologue) > 0) {
+          Printf(ctor_js,
+            "%s          __ptr = __chk(M._%s(%s));\n%s          break;\n",
+            str_prologue, sw, call_args ? Char(call_args) : "", str_free);
         } else {
-          if (str_prologue && Len(str_prologue) > 0) {
-            Printf(ctor_js,
-              "%s"
-              "          __ptr = __chk(M._%s(%s));\n"
-              "%s"
-              "          break;\n",
-              str_prologue, sw, call_args ? Char(call_args) : "", str_free);
-          } else {
-            Printf(ctor_js,
-              "          __ptr = __chk(M._%s(%s)); break;\n",
-              sw, call_args ? Char(call_args) : "");
-          }
+          Printf(ctor_js,
+            "          __ptr = __chk(M._%s(%s)); break;\n",
+            sw, call_args ? Char(call_args) : "");
         }
       } else {
         Printf(ctor_js,
-          "          throw new Error(`%s: no ctor matches args at length %s`);\n",
+          "          throw new TypeError(`%s: arg-type mismatch at length %s`);\n",
           class_jsname, arity_key);
       }
       Printf(ctor_js, "        }\n");
@@ -3725,8 +3719,14 @@ int WASM_JS::classHandler(Node *n) {
     SwigType_add_pointer(ptr_t);
     String *swig_tag = SwigType_manglestr(ptr_t);
     Printf(f_js_classes,
-      "  %s.prototype._swig_type = '%s';\n",
-      class_jsname, swig_tag);
+      "  %s.prototype._swig_type = '%s';\n"
+      /* Standard JS string/inspect hooks: forward to the wrapped C++
+         str() repr when present.  Generic (any class exposing str());
+         no language-specific knowledge here. */
+      "  if (!Object.prototype.hasOwnProperty.call(%s.prototype, 'toString'))\n"
+      "    %s.prototype.toString = function () { return (typeof this.str === 'function') ? this.str() : Object.prototype.toString.call(this); };\n"
+      "  %s.prototype[Symbol.for('nodejs.util.inspect.custom')] = function () { return this.toString(); };\n",
+      class_jsname, swig_tag, class_jsname, class_jsname, class_jsname);
     /* Record `swig_tag -> JS class name` so top() can emit a static
        table that SWIG_WASMJS_init_cast_chains uses to wire
        swig_type_info::clientdata.  Once clientdata is set,
@@ -3768,9 +3768,21 @@ int WASM_JS::classHandler(Node *n) {
      `apply` trap forwards to `Reflect.construct(target, args)`; the
      default `construct` trap leaves `new M.MX(...)` working unchanged.
      instanceof / static-method access pass through transparently. */
-  Printf(f_js_module,
-    "    %s: new Proxy(%s, { apply(t, _self, a) { return Reflect.construct(t, a); } }),\n",
-    class_jsname, class_jsname);
+  if (Getattr(n, "feature:wasmjs:index")) {
+    /* Matrix class: wrap every constructed instance in the element-index
+       Proxy (__mkIndex), for both `M.X(..)` (apply) and `new M.X(..)`
+       (construct).  __mkIndex / __INDEX_HANDLER come from casadi.i's
+       %insert("js"); see %feature("wasmjs:index"). */
+    if (!indexed_classes) indexed_classes = NewHash();
+    Setattr(indexed_classes, class_jsname, "1");
+    Printf(f_js_module,
+      "    %s: new Proxy(%s, { apply(t,_s,a){ return __mkIndex(Reflect.construct(t,a)); }, construct(t,a){ return __mkIndex(Reflect.construct(t,a)); } }),\n",
+      class_jsname, class_jsname);
+  } else {
+    Printf(f_js_module,
+      "    %s: new Proxy(%s, { apply(t, _self, a) { return Reflect.construct(t, a); } }),\n",
+      class_jsname, class_jsname);
+  }
 
   Delete(class_cpp_section); class_cpp_section = 0;
   Delete(class_js_body);     class_js_body     = 0;
@@ -3871,7 +3883,7 @@ int WASM_JS::constructorHandler(Node *n) {
           } else if (strstr(cs, "int") || strstr(cs, "long") || strstr(cs, "short")) {
             jscheck = "(typeof args[%d] === 'number' || typeof args[%d] === 'bigint')";
           } else if (strstr(cs, "bool")) {
-            jscheck = "(typeof args[%d] === 'boolean' || typeof args[%d] === 'number')";
+            jscheck = "(typeof args[%d] === 'boolean')";
           } else {
             /* Discriminate true string parms from compound types
                containing "string" or "char" in their name (e.g.
@@ -3951,7 +3963,21 @@ int WASM_JS::constructorHandler(Node *n) {
             Printf(str_free,
               "            M._free(__ps%d);\n", pi);
           } else {
-            Printf(call_args_js, "args[%d]", pi);
+            /* long long / casadi_int cross the boundary as wasm i64; under
+               WASM_BIGINT the JS caller must pass a BigInt (mirrors the
+               method-path `jsarg` for long long).  `long` is i32 in wasm32,
+               so only wrap (unsigned) long long.  Idempotent on BigInts. */
+            SwigType *tres = SwigType_typedef_resolve_all(Copy(t));
+            SwigType *eff  = tres ? tres : t;
+            SwigType *bare = SwigType_ltype(Copy(eff));
+            if (bare && SwigType_isreference(bare)) SwigType_del_reference(bare);
+            int tk = SwigType_type(bare ? bare : eff);
+            if (tk == T_LONGLONG || tk == T_ULONGLONG)
+              Printf(call_args_js, "BigInt(args[%d])", pi);
+            else
+              Printf(call_args_js, "args[%d]", pi);
+            if (bare) Delete(bare);
+            if (tres) Delete(tres);
           }
         }
       }
@@ -4011,6 +4037,7 @@ int WASM_JS::constructorHandler(Node *n) {
         String *t_call_args = NewString("");
         String *t_str_prologue = NewString("");
         String *t_str_free     = NewString("");
+        String *t_prim = NewString("");   /* typeof discriminators for the present primitive args */
         int pi = 0;
         for (Parm *q2 = p; q2; q2 = nextSibling(q2)) {
           if (is_in_numinputs0(q2)) continue;
@@ -4022,13 +4049,18 @@ int WASM_JS::constructorHandler(Node *n) {
             } else if (is_registered_class_type(t2)) {
               Printf(t_call_args, "__unwrap(args[%d])", pi);
             } else {
-              /* String-arg malloc dance.  ctype check only (see
-                 the full-arity branch for rationale). */
-              bool is_string = false;
+              /* Primitive / string present arg: emit the call value, a
+                 typeof discriminator (so same-arity overloads differing
+                 only in primitive types are told apart), and BigInt-wrap
+                 (unsigned) long long for the i64 ABI (mirrors the
+                 full-arity branch). */
+              SwigType *ts2 = Copy(t2);
+              SwigType *tr2 = SwigType_typedef_resolve_all(ts2);
+              String *tstr2 = SwigType_str(tr2 ? tr2 : ts2, 0);
+              const char *cs2 = Char(tstr2);
               String *ctype2 = Getattr(q2, "tmap:ctype");
-              if (ctype2 && (Strstr(ctype2, "char*") || Strstr(ctype2, "char *"))) {
-                is_string = true;
-              }
+              bool is_string = ctype2 && (Strstr(ctype2, "char*") || Strstr(ctype2, "char *"));
+              if (Len(t_prim) > 0) Printv(t_prim, " && ", NIL);
               if (is_string) {
                 Printf(t_call_args, "__ps%d", pi);
                 Printf(t_str_prologue,
@@ -4036,11 +4068,22 @@ int WASM_JS::constructorHandler(Node *n) {
                   "            const __ps%d  = M._malloc(__nps%d + 1);\n"
                   "            M.stringToUTF8(args[%d], __ps%d, __nps%d + 1);\n",
                   pi, pi, pi, pi, pi, pi, pi);
-                Printf(t_str_free,
-                  "            M._free(__ps%d);\n", pi);
-              } else {
+                Printf(t_str_free, "            M._free(__ps%d);\n", pi);
+                Printf(t_prim, "(typeof args[%d] === 'string')", pi);
+              } else if (strstr(cs2, "bool")) {
                 Printf(t_call_args, "args[%d]", pi);
+                Printf(t_prim, "(typeof args[%d] === 'boolean')", pi);
+              } else {
+                SwigType *bare2 = SwigType_ltype(Copy(tr2 ? tr2 : ts2));
+                int tk2 = SwigType_type(bare2);
+                if (tk2 == T_LONGLONG || tk2 == T_ULONGLONG)
+                  Printf(t_call_args, "BigInt(args[%d])", pi);
+                else
+                  Printf(t_call_args, "args[%d]", pi);
+                Printf(t_prim, "(typeof args[%d] === 'number' || typeof args[%d] === 'bigint')", pi, pi);
+                if (bare2) Delete(bare2);
               }
+              Delete(tstr2); if (tr2) Delete(tr2); Delete(ts2);
             }
           } else {
             /* Fill in C++ default as a JS literal.  Reuse the
@@ -4107,10 +4150,11 @@ int WASM_JS::constructorHandler(Node *n) {
         } else {
           Delete(t_str_prologue); Delete(t_str_free);
         }
-        /* No prim_checks for truncated entries -- the missing args are
-           filled, not user-supplied.  Could add prim checks for the
-           PRESENT primitive args; for now omit (the full-arity entry
-           already has them). */
+        /* prim_checks for the PRESENT primitive args: lets same-arity
+           overloads differing only in primitive types coexist (e.g.
+           Slice(i, bool) vs the Slice(start, stop, step=1) phantom). */
+        if (Len(t_prim) > 0) Setattr(tentry, "prim_checks", t_prim);
+        else Delete(t_prim);
         Append(ctor_overloads, tentry);
       }
     }
@@ -4663,9 +4707,15 @@ int WASM_JS::enumvalueDeclaration(Node *n) {
   String *vname  = Getattr(n, "name");
   String *emangle = mangle(enum_cname);
   String *swig_name = NewStringf("swig_enum_%s_%s", emangle, vname);
+  /* The JS integer width for enum values is regulated by the interface
+     file (.i) via %feature("wasmjs:enum_int_type"), so projects can keep
+     enums consistent with their own integer typedef (e.g. casadi_int ->
+     emitted as i64 -> JS bigint).  Defaults to plain int (-> JS number). */
+  String *etype = Getattr(n, "feature:wasmjs:enum_int_type");
+  if (!etype || Len(etype) == 0) etype = NewString("int");
   Printf(f_cpp_wrappers,
-    "EMSCRIPTEN_KEEPALIVE int %s() { return (int)(%s::%s); }\n",
-    swig_name, enum_cname, vname);
+    "EMSCRIPTEN_KEEPALIVE %s %s() { return (%s)(%s::%s); }\n",
+    etype, swig_name, etype, enum_cname, vname);
   register_export(Char(swig_name));
   Printf(enum_js_body, "      %s: M._%s(),\n", jsname, swig_name);
   Delete(swig_name); Delete(emangle);
