@@ -17,6 +17,7 @@
  * ----------------------------------------------------------------------------- */
 
 #include "swigmod.h"
+#include <cctype>
 
 class JULIA : public Language {
   File   *f_begin;
@@ -29,6 +30,9 @@ class JULIA : public Language {
   String *f_jl_exports;
 
   String *module_name;
+  Hash   *class_statics;  /* class jlname -> Hash of static fnames */
+  Hash   *class_members;  /* class jlname -> List of method-line templates (@SELF@) */
+  Hash   *class_bases;    /* class jlname -> List of base jlnames */
   String *class_jlname;   /* sym:name of class being processed, 0 outside */
   String *bare_symname;   /* unqualified member name captured pre-transform */
   bool    in_ctor, in_static;
@@ -36,7 +40,8 @@ class JULIA : public Language {
 
 public:
   JULIA() : f_begin(0), f_runtime(0), f_header(0), f_wrappers(0), f_init(0),
-            f_jl_types(0), f_jl_body(0), f_jl_exports(0), module_name(0), class_jlname(0),
+            f_jl_types(0), f_jl_body(0), f_jl_exports(0), module_name(0),
+            class_statics(0), class_members(0), class_bases(0), class_jlname(0),
             bare_symname(0), in_ctor(false), in_static(false), n_skipped(0) {}
 
   virtual void main(int argc, char *argv[]) {
@@ -126,6 +131,47 @@ public:
     Dump(f_jl_types, jf);
     Printf(jf, "\n");
     Dump(f_jl_body, jf);
+    /* Julia structs do not inherit: forward statics from base proxies so
+       sym(SX, ...) reaches the GenSX implementation. */
+    if (class_bases) {
+      Printf(jf, "\n# base-class static forwarders\n");
+      Iterator ci = First(class_bases);
+      while (ci.key) {
+        String *derived = (String *)ci.key;
+        /* transitive base walk */
+        List *queue = Copy((List *)ci.item);
+        Hash *seen = NewHash();
+        for (int qi = 0; qi < Len(queue); ++qi) {
+          String *b = (String *)Getitem(queue, qi);
+          if (Getattr(seen, b)) continue;
+          Setattr(seen, b, "1");
+          List *ml = class_members ? (List *)Getattr(class_members, b) : 0;
+          if (ml) {
+            for (int mi = 0; mi < Len(ml); ++mi) {
+              String *line = Copy((String *)Getitem(ml, mi));
+              Replaceall(line, "@SELF@", derived);
+              Printv(jf, line, NIL);
+              Delete(line);
+            }
+          }
+          Hash *set = (Hash *)Getattr(class_statics, b);
+          if (set) {
+            Iterator si = First(set);
+            while (si.key) {
+              Hash *own = class_statics ? (Hash *)Getattr(class_statics, derived) : 0;
+              if (!own || !Getattr(own, si.key))
+                Printf(jf, "%s(::Type{%s}, args...) = %s(%s, args...)\n",
+                       si.key, derived, si.key, b);
+              si = Next(si);
+            }
+          }
+          List *bb = (List *)Getattr(class_bases, b);
+          if (bb) for (int k = 0; k < Len(bb); ++k) Append(queue, Getitem(bb, k));
+        }
+        Delete(queue); Delete(seen);
+        ci = Next(ci);
+      }
+    }
     if (Len(f_jl_exports) > 0) Printf(jf, "export %s\n", f_jl_exports);
     Printf(jf, "\nend # module %s\n", module_name);
     Delete(jf);
@@ -197,6 +243,7 @@ public:
     /* ---- C side: signature + in-typemap marshaling ---- */
     String *csig = NewString("");
     String *jargs = NewString("");        /* Julia typed params */
+    List *jarg_names = 0, *jarg_defaults = 0;
     String *jccall_types = NewString("");
     String *jccall_args = NewString("");
     String *preserve = NewString("");
@@ -213,7 +260,8 @@ public:
       String *jt = Getattr(p, "tmap:jltype");
       String *jp = Getattr(p, "tmap:jlparam");
       String *pproxy = proxy_name(Getattr(p, "type"));
-      if (!ct || !in || !jt || (!jp && !pproxy)) { ok = false; break; }
+      bool jl_any = jt && Strcmp(jt, "Any") == 0;
+      if (!ct || !in || !jt || (!jp && !pproxy && !jl_any)) { ok = false; break; }
 
       String *inputvar = NewStringf("jarg%d", idx);
       if (Len(csig) > 0) Printf(csig, ", ");
@@ -228,13 +276,31 @@ public:
       Replaceall(an, "::", "_");
       {  /* typemap-applied parms can share names (INOUT, ...): dedupe */
         String *probe = NewStringf("%s::", an);
-        if (Strstr(jargs, probe)) { Delete(an); an = NewStringf("a%d", idx); }
+        bool dup = false;
+        if (jarg_names)
+          for (int i = 0; i < Len(jarg_names); ++i)
+            if (Strncmp((String *)Getitem(jarg_names, i), probe, Len(probe)) == 0) { dup = true; break; }
+        if (dup) { Delete(an); an = NewStringf("a%d", idx); }
         Delete(probe);
       }
-      if (Len(jargs) > 0) Printf(jargs, ", ");
-      Printf(jargs, "%s::%s", an, jp ? jp : pproxy);
+      if (!jarg_names) { jarg_names = NewList(); jarg_defaults = NewList(); }
+      Append(jarg_names, NewStringf("%s::%s", an, jp ? jp : (pproxy ? pproxy : (String*)NewString("Any"))));
+      {  /* compactdefaultargs: literal defaults, applied as a trailing run */
+        String *dv = Getattr(p, "value");
+        String *jdv = NewString("");
+        if (dv && Len(dv) > 0) {
+          if (Strcmp(dv, "true") == 0 || Strcmp(dv, "false") == 0) Printv(jdv, dv, NIL);
+          else {
+            bool numeric = Len(dv) > 0;
+            for (const char *c = Char(dv); *c; ++c)
+              if (!(isdigit(*c) || *c == '.' || *c == '-' || *c == '+' || *c == 'e')) { numeric = false; break; }
+            if (numeric) Printv(jdv, dv, NIL);
+          }
+        }
+        Append(jarg_defaults, jdv);
+      }
       Printf(jccall_types, "%s, ", jt);
-      if (!jp && pproxy) {  /* class-typed: pass .ptr, preserve wrapper */
+      if (!jp && pproxy && !jl_any) {  /* opaque-ptr class param: pass .ptr */
         Printf(jccall_args, "%s.ptr, ", an);
         Printf(preserve, "%s ", an);
       } else {
@@ -250,6 +316,21 @@ public:
       DelWrapper(w); Delete(wname);
       Delete(csig); Delete(jargs); Delete(jccall_types); Delete(jccall_args); Delete(preserve);
       return SWIG_NOWRAP;
+    }
+
+    /* assemble the Julia parameter list; defaults only as a trailing run */
+    if (jarg_names) {
+      int first_def = Len(jarg_names);
+      for (int i = Len(jarg_names) - 1; i >= 0; --i) {
+        if (Len((String *)Getitem(jarg_defaults, i)) == 0) break;
+        first_def = i;
+      }
+      for (int i = 0; i < Len(jarg_names); ++i) {
+        if (i > 0) Printf(jargs, ", ");
+        Printv(jargs, (String *)Getitem(jarg_names, i), NIL);
+        if (i >= first_def) Printf(jargs, "=%s", (String *)Getitem(jarg_defaults, i));
+      }
+      Delete(jarg_names); Delete(jarg_defaults);
     }
 
     /* action: members/ctors/statics arrive pre-transformed by the Language
@@ -306,11 +387,33 @@ public:
     String *sig = NewString("");
     if (in_static) Printf(sig, "::Type{%s}%s", class_jlname, Len(jargs) ? ", " : "");
     Printv(sig, jargs, NIL);
+    String *jline = NewString("");
     if (Len(preserve) > 0)
-      Printf(f_jl_body, "%s(%s) = GC.@preserve %sbegin %s end\n", fname, sig, preserve, body);
+      Printf(jline, "%s(%s) = GC.@preserve %sbegin %s end\n", fname, sig, preserve, body);
     else
-      Printf(f_jl_body, "%s(%s) = %s\n", fname, sig, body);
+      Printf(jline, "%s(%s) = %s\n", fname, sig, body);
+    Printv(f_jl_body, jline, NIL);
+    if (class_jlname && !in_static && !in_ctor) {
+      /* member method: register a @SELF@ template for derived-class flattening */
+      String *tmpl = Copy(jline);
+      String *selfpat = NewStringf("self::%s", class_jlname);
+      if (Strstr(tmpl, selfpat)) {
+        Replaceall(tmpl, selfpat, "self::@SELF@");
+        if (!class_members) class_members = NewHash();
+        List *lst = (List *)Getattr(class_members, class_jlname);
+        if (!lst) { lst = NewList(); Setattr(class_members, class_jlname, lst); }
+        Append(lst, tmpl);
+      } else Delete(tmpl);
+      Delete(selfpat);
+    }
+    Delete(jline);
     if (!class_jlname || in_static || in_ctor) add_export(fname);
+    if (in_static && class_jlname) {
+      if (!class_statics) class_statics = NewHash();
+      Hash *set = (Hash *)Getattr(class_statics, class_jlname);
+      if (!set) { set = NewHash(); Setattr(class_statics, class_jlname, set); }
+      Setattr(set, fname, "1");
+    }
 
     Delete(fname); Delete(sig); Delete(body); Delete(callcore);
     Delete(csig); Delete(jargs); Delete(jccall_types); Delete(jccall_args);
@@ -342,6 +445,18 @@ public:
       class_jlname, cxxname);
     Delete(cxxname);
 
+    {
+      List *bases = Getattr(n, "bases");
+      if (bases && Len(bases) > 0) {
+        if (!class_bases) class_bases = NewHash();
+        List *bl = NewList();
+        for (int bi = 0; bi < Len(bases); ++bi) {
+          String *bn = Getattr(Getitem(bases, bi), "sym:name");
+          if (bn) Append(bl, Copy(bn));
+        }
+        Setattr(class_bases, class_jlname, bl);
+      }
+    }
     Language::classHandler(n);
     class_jlname = 0;
     return SWIG_OK;
