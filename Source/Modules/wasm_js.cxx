@@ -62,6 +62,7 @@ public:
       member_overloads(0),
       stub_free_fn_buckets(0),
       stub_free_fn_order(0),
+      stub_static_instance_pending(0),
       ts_alias_in_set(0),
       ts_alias_out_set(0),
       class_has_base(false) {
@@ -342,6 +343,12 @@ protected:
   /* Preserves first-encounter order of buckets for deterministic
      emission. */
   List   *stub_free_fn_order;
+  /* "<class>::<jsname>" -> String of instance-form d.ts signatures for
+     static methods.  Python/MATLAB allow calling statics on instances;
+     the runtime emits prototype forwarders for them, and these pending
+     signatures type that form.  Spliced into f_stubs_class_body at
+     class end, skipping names a real instance method already owns. */
+  Hash   *stub_static_instance_pending;
   bool   class_has_base;
 
   String *mangle(const String *s) {
@@ -1809,6 +1816,16 @@ protected:
         Delete(entry);
       } else {
         stub_write_signature(f_stubs, indent, ni, kind);
+        /* Statics also get an instance-form signature, pending the
+           class-end collision check against real member methods. */
+        if (kind == 2 && class_jsname) {
+          if (!stub_static_instance_pending) stub_static_instance_pending = NewHash();
+          String *key = NewStringf("%s::%s", class_jsname, Getattr(ni, "sym:name"));
+          String *buf = (String *)Getattr(stub_static_instance_pending, key);
+          if (!buf) { buf = NewString(""); Setattr(stub_static_instance_pending, key, buf); }
+          stub_write_signature(buf, indent, ni, 1);
+          Delete(key);
+        }
       }
     }
     if (single) Delete(single);
@@ -3241,6 +3258,22 @@ int WASM_JS::classHandler(Node *n) {
        merge: TS requires both halves to share `export` modifiers
        (TS2395 otherwise).  `export declare const` for the value
        (initializerless, ambient). */
+    /* Type the instance-callable form of this class's statics (the
+       runtime emits matching prototype forwarders below), unless a
+       real instance method owns the name. */
+    if (stub_static_instance_pending) {
+      Iterator pit = First(stub_static_instance_pending);
+      while (pit.key) {
+        const char *ks = Char((String *)pit.key);
+        const char *pp = strstr(ks, "::");
+        if (pp && (size_t)(pp - ks) == (size_t)Len(class_jsname)
+            && strncmp(ks, Char(class_jsname), pp - ks) == 0
+            && (!member_overloads || !Getattr(member_overloads, pit.key))) {
+          Printv(f_stubs_class_body, (String *)pit.item, NIL);
+        }
+        pit = Next(pit);
+      }
+    }
     Printv(saved_stubs, "export declare class ", class_jsname, "__class", base_clause_ts, " {\n",
                        f_stubs_class_body,
                        "}\n",
@@ -3672,6 +3705,11 @@ int WASM_JS::classHandler(Node *n) {
               "    }\n",
               class_jsname, jsname);
           }
+          /* Statics are callable on instances, mirroring Python/MATLAB
+             -- unless a real instance method owns the name. */
+          if (!member_overloads || !Getattr(member_overloads, key))
+            Printf(static_js, "    %s(...args) { return %s.%s(...args); }\n",
+                   jsname, class_jsname, jsname);
         }
       }
       sit = Next(sit);
