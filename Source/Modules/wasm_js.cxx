@@ -2706,6 +2706,78 @@ int WASM_JS::top(Node *n) {
     "    return out;\n"
     "  }\n\n");
 
+  /* Non-throwing destructor path for the FinalizationRegistries.  A GC
+     sweep at interpreter shutdown can free objects after the wasm
+     module's C++ statics are torn down; a throw out of a
+     FinalizationRegistry callback aborts the process, and a failed
+     free in a destructor is not actionable from JS anyway -- warn
+     (outside shutdown) instead of throwing. */
+  Printf(f_js_pre,
+    "  let __shutting_down = false;\n"
+    "  if (typeof process !== \"undefined\" && typeof process.on === \"function\") {\n"
+    "    process.on(\"beforeExit\", () => { __shutting_down = true; });\n"
+    "    process.on(\"exit\", () => { __shutting_down = true; });\n"
+    "  }\n"
+    "  const __safe_free = (del, p) => {\n"
+    "    try { return del(p); }\n"
+    "    catch (e) {\n"
+    "      if (!__shutting_down && typeof console !== \"undefined\")\n"
+    "        console.warn(\"ignored error freeing wasm object:\", (e && e.message) || e);\n"
+    "    }\n"
+    "  };\n\n");
+
+  /* Callable-instance support.  __callable_class(Orig, fr, makeInvoke)\n
+     wraps a proxy class so constructed instances are directly invocable
+     JS functions: instances keep the full method API via setPrototypeOf,
+     the FinalizationRegistry registration is transferred to the callable,
+     and own-property collisions with function built-ins (`name`, ...)
+     are re-pointed at the class methods.  Prototype and static methods
+     returning bare instances are re-wrapped (ES6 method bodies bind the
+     inner class name, bypassing the outer wrapper binding).  Interface
+     files opt a class in from %insert("js") with:
+       Cls = __m.Cls = __callable_class(Cls, __fr_<mangled>, (self) => function (...args) { ... });
+   */
+  Printf(f_js_pre,
+    "  function __callable_class(Orig, fr, makeInvoke) {\n"
+    "    const builtins = Object.getOwnPropertyNames(function () {});\n"
+    "    const collisions = Object.getOwnPropertyNames(Orig.prototype)\n"
+    "      .filter((n) => n !== \"constructor\" && builtins.includes(n));\n"
+    "    const adopt = (inst) => {\n"
+    "      const callable = function (...args) { return makeInvoke(callable)(...args); };\n"
+    "      Object.setPrototypeOf(callable, Orig.prototype);\n"
+    "      callable._ptr = inst._ptr;\n"
+    "      fr.unregister(inst);\n"
+    "      fr.register(callable, inst._ptr, callable);\n"
+    "      inst._ptr = 0;\n"
+    "      for (const k of collisions)\n"
+    "        Object.defineProperty(callable, k,\n"
+    "          { value: Orig.prototype[k], writable: false, configurable: true });\n"
+    "      return callable;\n"
+    "    };\n"
+    "    const rewrap = (orig) => function (...args) {\n"
+    "      const r = orig.apply(this, args);\n"
+    "      return (r && typeof r === \"object\" && typeof r !== \"function\"\n"
+    "              && r instanceof Orig && r._ptr !== 0) ? adopt(r) : r;\n"
+    "    };\n"
+    "    for (const k of Object.getOwnPropertyNames(Orig.prototype)) {\n"
+    "      if (k === \"constructor\") continue;\n"
+    "      const d = Object.getOwnPropertyDescriptor(Orig.prototype, k);\n"
+    "      if (d && typeof d.value === \"function\")\n"
+    "        Object.defineProperty(Orig.prototype, k, { ...d, value: rewrap(d.value) });\n"
+    "    }\n"
+    "    function Wrapped(...args) { return adopt(new Orig(...args)); }\n"
+    "    Wrapped.prototype = Orig.prototype;\n"
+    "    Wrapped.prototype.constructor = Wrapped;\n"
+    "    for (const k of Object.getOwnPropertyNames(Orig)) {\n"
+    "      if (k === \"length\" || k === \"name\" || k === \"prototype\") continue;\n"
+    "      const d = Object.getOwnPropertyDescriptor(Orig, k);\n"
+    "      if (!d) continue;\n"
+    "      Object.defineProperty(Wrapped, k,\n"
+    "        typeof d.value === \"function\" ? { ...d, value: rewrap(d.value) } : d);\n"
+    "    }\n"
+    "    return Wrapped;\n"
+    "  }\n\n");
+
   /* Overload-dispatch type predicates.  Mirrors matlab's pattern: each
      candidate overload AND's `casadi::to_ptr(argv[i], <expected>**)`
      across all class-typed parms (skipping the actual conversion via
@@ -3744,7 +3816,7 @@ int WASM_JS::classHandler(Node *n) {
   // is still available below as an opt-in early-release.
   String *cmangle = mangle(cname);
   Printf(f_js_classes,
-    "  const __fr_%s = new FinalizationRegistry(p => M._swig_%s_delete(p));\n"
+    "  const __fr_%s = new FinalizationRegistry(p => __safe_free(M._swig_%s_delete, p));\n"
     "  class %s%s {\n%s  }\n",
     cmangle, cmangle, class_jsname, base_clause, class_js_body);
 
