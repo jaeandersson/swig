@@ -373,7 +373,10 @@ public:
         String *dv = Getattr(p, "value");
         String *jdv = NewString("");
         if (dv && Len(dv) > 0) {
+          const char *dc = Char(dv);
+          size_t dl = Len(dv);
           if (Strcmp(dv, "true") == 0 || Strcmp(dv, "false") == 0) Printv(jdv, dv, NIL);
+          else if (dl >= 2 && dc[0] == '"' && dc[dl-1] == '"') Printv(jdv, dv, NIL);
           else {
             bool numeric = Len(dv) > 0;
             for (const char *c = Char(dv); *c; ++c)
