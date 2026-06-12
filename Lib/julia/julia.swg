@@ -9,6 +9,8 @@
  *              `$call` is substituted with the ccall expression
  */
 
+%include <juliaprimtypes.swg>
+
 /* ---- numeric primitives ---- */
 %typemap(ctype)  double, const double&, float, const float& "double"
 %typemap(in)     double, float %{ $1 = ($1_ltype)$input; %}
