@@ -24,6 +24,7 @@ class JULIA : public Language {
   String *f_header;
   String *f_wrappers;
   String *f_init;
+  String *f_jl_types;
   String *f_jl_body;
   String *f_jl_exports;
 
@@ -35,7 +36,7 @@ class JULIA : public Language {
 
 public:
   JULIA() : f_begin(0), f_runtime(0), f_header(0), f_wrappers(0), f_init(0),
-            f_jl_body(0), f_jl_exports(0), module_name(0), class_jlname(0),
+            f_jl_types(0), f_jl_body(0), f_jl_exports(0), module_name(0), class_jlname(0),
             bare_symname(0), in_ctor(false), in_static(false), n_skipped(0) {}
 
   virtual void main(int argc, char *argv[]) {
@@ -69,6 +70,7 @@ public:
     f_header   = NewString("");
     f_wrappers = NewString("");
     f_init     = NewString("");
+    f_jl_types   = NewString("");
     f_jl_body    = NewString("");
     f_jl_exports = NewString("");
 
@@ -121,6 +123,8 @@ public:
       "    _check(p)\n    s = unsafe_string(p)\n"
       "    ccall((:swig_jl_str_free, _lib), Cvoid, (Ptr{UInt8},), p)\n    s\nend\n\n",
       module_name);
+    Dump(f_jl_types, jf);
+    Printf(jf, "\n");
     Dump(f_jl_body, jf);
     if (Len(f_jl_exports) > 0) Printf(jf, "export %s\n", f_jl_exports);
     Printf(jf, "\nend # module %s\n", module_name);
@@ -222,6 +226,11 @@ public:
       String *pname = Getattr(p, "name");
       String *an = (pname && Len(pname) > 0) ? NewStringf("%s", pname) : NewStringf("a%d", idx);
       Replaceall(an, "::", "_");
+      {  /* typemap-applied parms can share names (INOUT, ...): dedupe */
+        String *probe = NewStringf("%s::", an);
+        if (Strstr(jargs, probe)) { Delete(an); an = NewStringf("a%d", idx); }
+        Delete(probe);
+      }
       if (Len(jargs) > 0) Printf(jargs, ", ");
       Printf(jargs, "%s::%s", an, jp ? jp : pproxy);
       Printf(jccall_types, "%s, ", jt);
@@ -317,7 +326,7 @@ public:
     class_jlname = Getattr(n, "sym:name");
     String *cname = Getattr(n, "name");
 
-    Printf(f_jl_body,
+    Printf(f_jl_types,
       "mutable struct %s\n    ptr::Ptr{Cvoid}\n"
       "    function %s(p::Ptr{Cvoid})\n"
       "        x = new(p)\n"
@@ -326,10 +335,12 @@ public:
       class_jlname, class_jlname, class_jlname);
     add_export(class_jlname);
 
+    String *cxxname = SwigType_namestr(cname);
     Printf(f_wrappers,
       "extern \"C\" void _swig_%s_delete(void *p) {\n"
       "  SWIG_JL_ENTER();\n  try { delete static_cast<%s*>(p); } SWIG_JL_CATCH()\n}\n\n",
-      class_jlname, cname);
+      class_jlname, cxxname);
+    Delete(cxxname);
 
     Language::classHandler(n);
     class_jlname = 0;
