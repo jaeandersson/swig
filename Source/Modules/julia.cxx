@@ -111,7 +111,7 @@ public:
     Language::top(n);
 
     SwigType_emit_type_table(f_runtime, f_wrappers);
-    Printf(f_init, "extern \"C\" void _swig_jl_init_types() {\n%s}\n", f_type_init);
+    Printf(f_init, "extern \"C\" void _swig_jl_init_types() {\n  SWIG_InitializeModule(0);\n%s}\n", f_type_init);
 
     Dump(f_runtime, f_begin);
     Dump(f_header, f_begin);

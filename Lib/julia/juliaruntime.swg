@@ -8,6 +8,7 @@
 #include <julia.h>
 %}
 %insert(runtime) "swigrun.swg";
+%insert(runtime) "swiglabels.swg";
 %insert(runtime) "swigerrors.swg";
 %insert(runtime) %{
 /* Julia-proxy-name -> swig_type_info registry, filled by the generated
@@ -117,3 +118,9 @@ SWIGRUNTIME jl_value_t* SWIG_AppendOutput(jl_value_t* cur, jl_value_t* x) {
   return r;
 }
 %}
+%insert(runtime) %{
+/* single-module process: no cross-module type sharing */
+#define SWIG_GetModule(cd) 0
+#define SWIG_SetModule(cd, m) (void)(m)
+%}
+%insert(init) "swiginit.swg";
