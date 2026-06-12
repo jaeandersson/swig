@@ -9,6 +9,7 @@
  *              `$call` is substituted with the ccall expression
  */
 
+%include <juliaruntime.swg>
 %include <juliaprimtypes.swg>
 
 /* ---- numeric primitives ---- */
@@ -172,3 +173,8 @@ static jl_value_t* swig_jl_from_vec_string(const std::vector<std::string>& v) {
 %typemap(jltype) std::vector<std::string>, const std::vector<std::string>& "Any"
 %typemap(jlparam) std::vector<std::string>, const std::vector<std::string>& "AbstractVector{<:AbstractString}"
 %typemap(jlout)  std::vector<std::string>, const std::vector<std::string>& "_check($call)::Vector{String}"
+
+/* ---- runtime support for interface libraries (casadi.i-style) ----
+ * Pointer carriers: a Julia proxy (mutable struct with a `ptr::Ptr{Cvoid}`
+ * field) crosses as jl_value_t*; SWIG_ConvertPtr reads the field.  Type
+ * validation is deferred to Julia-side dispatch on the proxy types. */

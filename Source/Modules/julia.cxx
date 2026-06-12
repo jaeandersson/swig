@@ -97,6 +97,8 @@ public:
 
     Language::top(n);
 
+    SwigType_emit_type_table(f_runtime, f_wrappers);
+
     Dump(f_runtime, f_begin);
     Dump(f_header, f_begin);
     Dump(f_wrappers, f_begin);
@@ -355,6 +357,27 @@ public:
     Delete(bare_symname); bare_symname = 0;
     in_static = false;
     return r;
+  }
+
+  virtual int constantWrapper(Node *n) {
+    if (class_jlname) return SWIG_OK;  /* class-scope consts: later */
+    String *symname = Getattr(n, "sym:name");
+    String *value = Getattr(n, "value");
+    SwigType *t = Getattr(n, "type");
+    String *ts = SwigType_str(t, 0);
+    if (Strcmp(ts, "int") == 0 || Strcmp(ts, "long") == 0 || Strstr(ts, "long long")) {
+      /* value may be a C++ qualified name (casadi::OP_ADD); emit a C getter */
+      Printf(f_wrappers, "extern \"C\" long long _swig_const_%s() { return (long long)(%s); }\n",
+             symname, value);
+      Printf(f_jl_body, "const %s = Int(ccall((:_swig_const_%s, _lib), Clonglong, ()))\n",
+             symname, symname);
+    } else if (Strcmp(ts, "double") == 0) {
+      Printf(f_wrappers, "extern \"C\" double _swig_const_%s() { return (double)(%s); }\n",
+             symname, value);
+      Printf(f_jl_body, "const %s = ccall((:_swig_const_%s, _lib), Cdouble, ())\n",
+             symname, symname);
+    }
+    return SWIG_OK;  /* silently skip strings/other for now */
   }
 
   virtual int destructorHandler(Node *) { return SWIG_OK; } /* emitted in classHandler */
