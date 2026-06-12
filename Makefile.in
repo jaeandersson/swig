@@ -458,7 +458,7 @@ install-main:
 
 lib-languages = typemaps tcl perl5 python guile java ruby php ocaml octave \
 	matlab csharp lua r c go d javascript javascript/jsc \
-	javascript/v8 javascript/napi wasm_js scilab xml
+	javascript/v8 javascript/napi wasm_js julia scilab xml
 
 lib-modules = std
 

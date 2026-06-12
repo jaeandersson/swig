@@ -47,6 +47,7 @@ extern "C" {
   Language *swig_xml(void);
   Language *swig_embind(void);
   Language *swig_wasm_js(void);
+  Language *swig_julia(void);
 }
 
 /* Association of command line options to language modules.
@@ -62,6 +63,7 @@ static TargetLanguageModule modules[] = {
   {"-d", swig_d, "D", Supported},
   {"-embind", swig_embind, "Emscripten Embind C++ bindings", Experimental},
   {"-wasm-js", swig_wasm_js, "Raw WebAssembly + JavaScript wrapper (no Embind)", Experimental},
+  {"-julia", swig_julia, "Julia (flat C ABI + ccall module)", Experimental},
   {"-go", swig_go, "Go", Supported},
   {"-guile", swig_guile, "Guile", Supported},
   {"-java", swig_java, "Java", Supported},
