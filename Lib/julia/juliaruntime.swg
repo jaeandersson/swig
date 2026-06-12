@@ -21,6 +21,19 @@ SWIGRUNTIME std::map<std::string, swig_type_info*>& swig_jl_proxy_registry() {
   static std::map<std::string, swig_type_info*> reg;
   return reg;
 }
+SWIGRUNTIME std::map<std::string, jl_value_t*>& swig_jl_proxy_types() {
+  static std::map<std::string, jl_value_t*> reg;  /* Julia DataTypes: globally rooted */
+  return reg;
+}
+SWIGRUNTIME std::map<swig_type_info*, jl_value_t*>& swig_jl_ti2type() {
+  static std::map<swig_type_info*, jl_value_t*> reg;
+  return reg;
+}
+extern "C" SWIGEXPORT void swig_jl_register_proxy_type(const char* jlname, jl_value_t* jltype) {
+  swig_jl_proxy_types()[jlname] = jltype;
+  std::map<std::string, swig_type_info*>::iterator it = swig_jl_proxy_registry().find(jlname);
+  if (it != swig_jl_proxy_registry().end()) swig_jl_ti2type()[it->second] = jltype;
+}
 SWIGRUNTIME void swig_jl_register_proxy(const char* jlname, swig_type_info* ti) {
   if (ti) swig_jl_proxy_registry()[jlname] = ti;
 }
@@ -51,11 +64,56 @@ SWIGRUNTIME int swig_jl_convert_ptr(jl_value_t* p, void** out, swig_type_info* t
 #define SWIG_ConvertPtr(obj, pptr, type, flags) swig_jl_convert_ptr(obj, pptr, type)
 /* Returns are wrapped Julia-side (proxy ctor over void*); from_ptr paths
    that build GUESTOBJECT returns box the pointer for the .jl layer. */
-SWIGRUNTIME jl_value_t* swig_jl_new_pointer_obj(void* ptr) {
+SWIGRUNTIME jl_value_t* swig_jl_new_pointer_obj(void* ptr, swig_type_info* type) {
+  if (type) {
+    std::map<swig_type_info*, jl_value_t*>::iterator it = swig_jl_ti2type().find(type);
+    if (it == swig_jl_ti2type().end()) {
+      /* fallback: match by mangled name (duplicate table entries) */
+      for (std::map<std::string, swig_type_info*>::iterator r = swig_jl_proxy_registry().begin();
+           r != swig_jl_proxy_registry().end(); ++r) {
+        if (r->second && type->name && strcmp(r->second->name, type->name) == 0) {
+          std::map<std::string, jl_value_t*>::iterator t2 = swig_jl_proxy_types().find(r->first);
+          if (t2 != swig_jl_proxy_types().end()) {
+            swig_jl_ti2type()[type] = t2->second;
+            it = swig_jl_ti2type().find(type);
+          }
+          break;
+        }
+      }
+    }
+    if (it != swig_jl_ti2type().end()) {
+      jl_value_t* boxed = jl_box_voidpointer(ptr);
+      JL_GC_PUSH1(&boxed);
+      jl_value_t* r = jl_call1((jl_function_t*)it->second, boxed);  /* proxy w/ finalizer */
+      JL_GC_POP();
+      return r;
+    }
+  }
   return jl_box_voidpointer(ptr);
 }
-#define SWIG_NewPointerObj(ptr, type, flags) swig_jl_new_pointer_obj(ptr)
+#define SWIG_NewPointerObj(ptr, type, flags) swig_jl_new_pointer_obj(ptr, type)
 #define SWIG_exception_fail(code, msg) do { throw std::runtime_error(msg); } while (0)
 #define SWIG_exception(code, msg)      do { throw std::runtime_error(msg); } while (0)
 #define SWIG_fail                      throw std::runtime_error("SWIG conversion failed")
+%}
+%insert(runtime) %{
+/* %append_output target: first output returned bare; further outputs grow a tuple. */
+SWIGRUNTIME jl_value_t* SWIG_AppendOutput(jl_value_t* cur, jl_value_t* x) {
+  if (!cur) return x;
+  JL_GC_PUSH2(&cur, &x);
+  jl_function_t* tuple_f = jl_get_function(jl_core_module, "tuple");
+  jl_value_t* r;
+  if (jl_is_tuple(cur)) {
+    size_t n = jl_nfields(cur);
+    jl_value_t** vals = (jl_value_t**)alloca(sizeof(jl_value_t*) * (n + 1));
+    for (size_t i = 0; i < n; ++i) vals[i] = jl_fieldref(cur, i);
+    vals[n] = x;
+    r = jl_call(tuple_f, vals, (int)(n + 1));
+  } else {
+    jl_value_t* vals[2] = { cur, x };
+    r = jl_call(tuple_f, vals, 2);
+  }
+  JL_GC_POP();
+  return r;
+}
 %}
