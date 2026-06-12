@@ -6,6 +6,10 @@
  * proxy types, finalizers and typed methods.  Overloads map onto Julia's
  * multiple dispatch; no arity/probe dispatchers are generated.
  *
+ * Conversions are typemap-driven (Lib/julia/julia.swg): standard names
+ * (ctype/in/out/freearg) shape the extern-"C" boundary; julia-prefixed
+ * names (jltype/jlparam/jlout) shape the generated .jl methods.
+ *
  * Error protocol: every wrapper clears a thread_local error slot on entry
  * and fills it from catch(...); the Julia side checks the slot after each
  * ccall (raising target-side keeps C++ unwinding sane -- never longjmp/
@@ -20,21 +24,19 @@ class JULIA : public Language {
   String *f_header;
   String *f_wrappers;
   String *f_init;
-  String *f_jl;          /* generated Julia module source */
   String *f_jl_body;
-  String *f_jl_exports;  /* names to export from the module */
+  String *f_jl_exports;
 
   String *module_name;
-  String *class_jlname;  /* sym:name of the class being processed, 0 outside */
-  String *class_cname;   /* fully qualified C++ name */
-  bool    class_has_ctor;
+  String *class_jlname;   /* sym:name of class being processed, 0 outside */
+  String *bare_symname;   /* unqualified member name captured pre-transform */
+  bool    in_ctor, in_static;
   int     n_skipped;
 
 public:
   JULIA() : f_begin(0), f_runtime(0), f_header(0), f_wrappers(0), f_init(0),
-            f_jl(0), f_jl_body(0), f_jl_exports(0), module_name(0),
-            class_jlname(0), class_cname(0), class_has_ctor(false),
-            n_skipped(0) {}
+            f_jl_body(0), f_jl_exports(0), module_name(0), class_jlname(0),
+            bare_symname(0), in_ctor(false), in_static(false), n_skipped(0) {}
 
   virtual void main(int argc, char *argv[]) {
     (void)argc; (void)argv;
@@ -44,90 +46,19 @@ public:
     allow_overloading();
   }
 
-  /* ---- type mapping (hardcoded primitives for the skeleton; the typemap
-     subsystem lands when casadi.i consumption starts) ---- */
-
-  /* Returns the C type used at the extern-"C" boundary, or 0 if the type
-     is not yet supported.  `resolved` should be SwigType_typedef_resolve_all'd. */
-  const char *boundary_ctype(SwigType *t, bool is_return) {
+  /* proxy name for a (possibly ref/ptr) class type, or 0 if not wrapped */
+  String *proxy_name(SwigType *t) {
     SwigType *r = SwigType_typedef_resolve_all(t);
-    const char *res = 0;
-    if (SwigType_isreference(r) || SwigType_ispointer(r)) {
-      SwigType *base = Copy(r);
-      if (SwigType_isreference(base)) SwigType_del_reference(base);
-      else SwigType_del_pointer(base);
-      String *bstr = SwigType_str(base, 0);
-      bool is_str = Strstr(bstr, "std::string") != 0;
-      bool is_char = Strcmp(SwigType_base(base), "char") == 0;
-      Delete(bstr);
-      if (is_char) res = is_return ? "char *" : "const char *";
-      else if (is_str) res = is_return ? "char *" : "const char *";
-      else if (is_class_type(base)) res = "void *";
-      Delete(base);
-      Delete(r);
-      return res;
-    }
-    String *s = SwigType_str(r, 0);
-    if (Strcmp(s, "double") == 0 || Strcmp(s, "float") == 0) res = "double";
-    else if (Strcmp(s, "bool") == 0) res = "unsigned char";
-    else if (Strcmp(s, "int") == 0 || Strcmp(s, "long") == 0
-          || Strcmp(s, "long long") == 0 || Strcmp(s, "short") == 0
-          || Strcmp(s, "size_t") == 0 || Strcmp(s, "unsigned int") == 0
-          || Strcmp(s, "unsigned long") == 0 || Strcmp(s, "casadi_int") == 0)
-      res = "long long";
-    else if (Strstr(s, "std::string")) res = is_return ? "char *" : "const char *";
-    else if (Strcmp(s, "void") == 0 && is_return) res = "void";
-    else if (is_class_type(r)) res = "void *";
-    Delete(s);
-    Delete(r);
-    return res;
-  }
-
-  bool is_class_type(SwigType *t) {
-    SwigType *r = SwigType_typedef_resolve_all(t);
-    Node *cls = classLookup(r);
-    Delete(r);
-    return cls != 0;
-  }
-
-  /* Julia-side ccall arg type for a boundary ctype. */
-  const char *jl_ctype(const char *bt) {
-    if (!bt) return 0;
-    if (Strcmp(bt, "double") == 0) return "Cdouble";
-    if (Strcmp(bt, "long long") == 0) return "Clonglong";
-    if (Strcmp(bt, "unsigned char") == 0) return "Cuchar";
-    if (Strcmp(bt, "const char *") == 0) return "Cstring";
-    if (Strcmp(bt, "char *") == 0) return "Ptr{UInt8}";
-    if (Strcmp(bt, "void *") == 0) return "Ptr{Cvoid}";
-    if (Strcmp(bt, "void") == 0) return "Cvoid";
-    return 0;
-  }
-
-  /* Julia-side user-facing parameter type annotation. */
-  String *jl_param_type(SwigType *t) {
-    SwigType *r = SwigType_typedef_resolve_all(t);
-    String *res = 0;
-    Node *cls = 0;
     SwigType *base = Copy(r);
     if (SwigType_isreference(base)) SwigType_del_reference(base);
     else if (SwigType_ispointer(base)) SwigType_del_pointer(base);
-    cls = classLookup(base);
-    if (cls) {
-      res = Copy(Getattr(cls, "sym:name"));
-    } else {
-      String *s = SwigType_str(r, 0);
-      if (Strcmp(s, "double") == 0 || Strcmp(s, "float") == 0) res = NewString("Real");
-      else if (Strcmp(s, "bool") == 0) res = NewString("Bool");
-      else if (Strstr(s, "std::string") || Strstr(s, "char")) res = NewString("AbstractString");
-      else res = NewString("Integer");
-      Delete(s);
-    }
+    if (SwigType_isqualifier(base)) SwigType_del_qualifier(base);
+    Node *cls = classLookup(base);
+    String *res = cls ? Copy(Getattr(cls, "sym:name")) : 0;
     Delete(base);
     Delete(r);
     return res;
   }
-
-  /* ---- top ---- */
 
   virtual int top(Node *n) {
     module_name = Copy(Getattr(n, "name"));
@@ -157,22 +88,20 @@ public:
       "#define SWIG_JL_CATCH(ret) \\\n"
       "  catch (const std::exception& e) { swig_jl_err_code = 1; swig_jl_err_msg = e.what(); return ret; } \\\n"
       "  catch (...) { swig_jl_err_code = 1; swig_jl_err_msg = \"unknown C++ exception\"; return ret; }\n"
+      "static char* swig_jl_strdup(const std::string& s) { char* p = (char*)malloc(s.size()+1); memcpy(p, s.c_str(), s.size()+1); return p; }\n"
       "extern \"C\" {\n"
       "int swig_jl_last_error_code() { return swig_jl_err_code; }\n"
       "const char* swig_jl_last_error_msg() { return swig_jl_err_msg.c_str(); }\n"
-      "char* swig_jl_strdup(const std::string& s) { char* p = (char*)malloc(s.size()+1); memcpy(p, s.c_str(), s.size()+1); return p; }\n"
       "void swig_jl_str_free(char* p) { free(p); }\n"
       "}\n\n");
 
     Language::top(n);
 
-    /* assemble C++ wrapper */
     Dump(f_runtime, f_begin);
     Dump(f_header, f_begin);
     Dump(f_wrappers, f_begin);
     Dump(f_init, f_begin);
 
-    /* assemble Julia module next to the C++ output */
     String *jlfile = NewStringf("%s%s.jl", SWIG_output_directory(), module_name);
     File *jf = NewFile(jlfile, "w", SWIG_output_files());
     if (!jf) { FileErrorDisplay(jlfile); Exit(EXIT_FAILURE); }
@@ -196,216 +125,195 @@ public:
     Delete(jf);
 
     if (n_skipped > 0)
-      Printf(stderr, "swig -julia: skipped %d declaration(s) with unsupported types (marked in output)\n", n_skipped);
+      Printf(stderr, "swig -julia: skipped %d declaration(s) with unsupported types\n", n_skipped);
 
     Delete(f_begin);
     return SWIG_OK;
   }
 
-  /* ---- shared emission for free functions / methods / ctors ---- */
-
   void add_export(const String *name) {
-    if (Strstr(f_jl_exports, name)) return;
+    String *probe = NewStringf("|%s|", name);
+    String *hay = NewStringf("|%s|", f_jl_exports);
+    Replaceall(hay, ", ", "|");
+    bool present = Strstr(hay, probe) != 0;
+    Delete(probe); Delete(hay);
+    if (present) return;
     if (Len(f_jl_exports) > 0) Printv(f_jl_exports, ", ", NIL);
     Printv(f_jl_exports, name, NIL);
   }
 
-  /* kind: 0 free fn, 1 member method, 2 constructor, 3 static method */
-  int emit_callable(Node *n, int kind) {
+  void skip(Node *n, const char *why) {
+    ++n_skipped;
+    Printf(f_jl_body, "# skipped %s (%s)\n", Getattr(n, "sym:name"), why);
+  }
+
+  /* ---- the single emission point: every callable lands here ---- */
+
+  virtual int functionWrapper(Node *n) {
     String *symname = Getattr(n, "sym:name");
-    String *overname = Getattr(n, "sym:overname");  /* "__SWIG_0" or 0 */
-    SwigType *returntype = (kind == 2) ? 0 : Getattr(n, "type");
+    String *overname = Getattr(n, "sym:overname");
+    SwigType *returntype = Getattr(n, "type");
     ParmList *parms = Getattr(n, "parms");
 
-    /* boundary signature check */
-    const char *ret_bt = (kind == 2) ? "void *" : boundary_ctype(returntype, true);
-    if (!ret_bt) { skip(n, "return type"); return SWIG_NOWRAP; }
-    for (Parm *p = parms; p; p = nextSibling(p)) {
-      if (!boundary_ctype(Getattr(p, "type"), false)) { skip(n, "parameter type"); return SWIG_NOWRAP; }
-    }
-
+    Wrapper *w = NewWrapper();
     String *wname = NewStringf("_swig_%s_%s%s",
         class_jlname ? Char(class_jlname) : "g", Char(symname),
         overname ? Char(overname) : "");
+    Setattr(n, "wrap:name", wname);
 
-    /* ---- C++ side ---- */
-    String *cargs = NewString("");   /* extern C parameter list */
-    String *cconv = NewString("");   /* arg conversion statements */
-    String *ccall_args = NewString(""); /* args for the C++ call */
-    int idx = 0;
-    if (kind == 1) Printf(cargs, "void *self");
-    for (Parm *p = parms; p; p = nextSibling(p), ++idx) {
-      SwigType *pt = Getattr(p, "type");
-      const char *bt = boundary_ctype(pt, false);
-      if (Len(cargs) > 0) Printf(cargs, ", ");
-      Printf(cargs, "%s a%d", bt, idx);
-      if (Len(ccall_args) > 0) Printf(ccall_args, ", ");
-      SwigType *r = SwigType_typedef_resolve_all(pt);
-      if (Strcmp(bt, "void *") == 0) {
-        SwigType *base = Copy(r);
-        if (SwigType_isreference(base)) SwigType_del_reference(base);
-        else if (SwigType_ispointer(base)) SwigType_del_pointer(base);
-        String *bstr = SwigType_str(base, 0);
-        if (SwigType_ispointer(r)) Printf(ccall_args, "static_cast<%s*>(a%d)", bstr, idx);
-        else Printf(ccall_args, "*static_cast<%s*>(a%d)", bstr, idx);
-        Delete(bstr); Delete(base);
-      } else if (Strcmp(bt, "const char *") == 0 && Strstr(SwigType_str(r, 0), "std::string")) {
-        Printf(cconv, "  std::string arg%d(a%d);\n", idx, idx);
-        Printf(ccall_args, "arg%d", idx);
-      } else if (Strcmp(bt, "unsigned char") == 0) {
-        Printf(ccall_args, "a%d != 0", idx);
-      } else {
-        Printf(ccall_args, "a%d", idx);
-      }
-      Delete(r);
+    /* attach typemaps; sets lname (arg1, ...) for $1 substitution */
+    emit_parameter_variables(parms, w);
+    emit_attach_parmmaps(parms, w);
+    Swig_typemap_attach_parms("ctype", parms, w);
+    Swig_typemap_attach_parms("jltype", parms, w);
+    Swig_typemap_attach_parms("jlparam", parms, w);
+
+    /* return-type typemaps via a fake parm (lname needed for $1 subst) */
+    Parm *retp = NewParm(returntype, NewString("result"), n);
+    Setattr(retp, "lname", Swig_cresult_name());
+    Swig_typemap_attach_parms("ctype", retp, 0);
+    Swig_typemap_attach_parms("jltype", retp, 0);
+    Swig_typemap_attach_parms("jlout", retp, 0);
+
+    String *ret_ct = Getattr(retp, "tmap:ctype:out");
+    if (!ret_ct) ret_ct = Getattr(retp, "tmap:ctype");
+    String *ret_jt = Getattr(retp, "tmap:jltype:out");
+    if (!ret_jt) ret_jt = Getattr(retp, "tmap:jltype");
+    String *ret_jlout = Getattr(retp, "tmap:jlout");
+    String *ret_proxy = proxy_name(returntype);
+    bool ret_is_class = ret_proxy != 0;
+    if (!ret_ct || !ret_jt || (!ret_jlout && !ret_is_class)) {
+      skip(n, "return type");
+      DelWrapper(w); Delete(wname);
+      return SWIG_NOWRAP;
     }
 
-    String *fail_ret = NewString("");
-    if (Strcmp(ret_bt, "void") != 0)
-      Printf(fail_ret, "%s", Strcmp(ret_bt, "double") == 0 ? "0.0" :
-             (Strcmp(ret_bt, "void *") == 0 || Strstr(ret_bt, "char *")) ? "0" : "0");
-
-    String *callexpr = NewString("");
-    if (kind == 2) {
-      Printf(callexpr, "new %s(%s)", class_cname, ccall_args);
-    } else if (kind == 1) {
-      Printf(callexpr, "static_cast<%s*>(self)->%s(%s)", class_cname, Getattr(n, "name"), ccall_args);
-    } else if (kind == 3) {
-      Printf(callexpr, "%s::%s(%s)", class_cname, Getattr(n, "name"), ccall_args);
-    } else {
-      Printf(callexpr, "%s(%s)", Getattr(n, "name"), ccall_args);
-    }
-
-    Printf(f_wrappers, "extern \"C\" %s %s(%s) {\n  SWIG_JL_ENTER();\n  try {\n%s",
-           ret_bt, wname, Len(cargs) ? Char(cargs) : "void", cconv);
-    if (kind == 2) {
-      Printf(f_wrappers, "    return %s;\n", callexpr);
-    } else if (Strcmp(ret_bt, "void") == 0) {
-      Printf(f_wrappers, "    %s;\n    return;\n", callexpr);
-    } else if (Strcmp(ret_bt, "void *") == 0) {
-      SwigType *rr = SwigType_typedef_resolve_all(returntype);
-      if (SwigType_ispointer(rr) || SwigType_isreference(rr)) {
-        SwigType *base = Copy(rr);
-        if (SwigType_isreference(base)) SwigType_del_reference(base); else SwigType_del_pointer(base);
-        String *bstr = SwigType_str(base, 0);
-        Printf(f_wrappers, "    return (void*)new %s(%s%s);\n", bstr,
-               SwigType_isreference(rr) ? "" : "*", callexpr);
-        Delete(bstr); Delete(base);
-      } else {
-        String *bstr = SwigType_str(rr, 0);
-        Printf(f_wrappers, "    return (void*)new %s(%s);\n", bstr, callexpr);
-        Delete(bstr);
-      }
-      Delete(rr);
-    } else if (Strstr(ret_bt, "char *")) {
-      Printf(f_wrappers, "    return swig_jl_strdup(%s);\n", callexpr);
-    } else if (Strcmp(ret_bt, "unsigned char") == 0) {
-      Printf(f_wrappers, "    return (%s) ? 1 : 0;\n", callexpr);
-    } else {
-      Printf(f_wrappers, "    return (%s)(%s);\n", ret_bt, callexpr);
-    }
-    Printf(f_wrappers, "  } SWIG_JL_CATCH(%s)\n}\n\n", Len(fail_ret) ? Char(fail_ret) : "");
-
-    /* ---- Julia side ---- */
-    String *jargs = NewString("");      /* typed parameter list */
-    String *jccall_types = NewString(""); /* ccall type tuple */
+    /* ---- C side: signature + in-typemap marshaling ---- */
+    String *csig = NewString("");
+    String *jargs = NewString("");        /* Julia typed params */
+    String *jccall_types = NewString("");
     String *jccall_args = NewString("");
     String *preserve = NewString("");
-    if (kind == 1) {
-      Printf(jccall_types, "Ptr{Cvoid}, ");
-      Printf(jccall_args, "self.ptr, ");
-      Printf(preserve, "self ");
-    }
-    idx = 0;
-    for (Parm *p = parms; p; p = nextSibling(p), ++idx) {
-      SwigType *pt = Getattr(p, "type");
-      const char *bt = boundary_ctype(pt, false);
-      String *jt = jl_param_type(pt);
+    int idx = 0;
+    bool ok = true;
+    Parm *p = parms;
+    while (p) {
+      if (checkAttribute(p, "tmap:in:numinputs", "0")) {
+        p = Getattr(p, "tmap:in:next");
+        continue;
+      }
+      String *ct = Getattr(p, "tmap:ctype");
+      String *in = Getattr(p, "tmap:in");
+      String *jt = Getattr(p, "tmap:jltype");
+      String *jp = Getattr(p, "tmap:jlparam");
+      String *pproxy = proxy_name(Getattr(p, "type"));
+      if (!ct || !in || !jt || (!jp && !pproxy)) { ok = false; break; }
+
+      String *inputvar = NewStringf("jarg%d", idx);
+      if (Len(csig) > 0) Printf(csig, ", ");
+      Printf(csig, "%s %s", ct, inputvar);
+      String *inb = Copy(in);
+      Replaceall(inb, "$input", inputvar);
+      Printv(w->code, inb, "\n", NIL);
+      Delete(inb);
+
       String *pname = Getattr(p, "name");
-      String *an = (pname && Len(pname) > 0 && !Strstr(pname, "arg")) ?
-          NewStringf("%s", pname) : NewStringf("a%d", idx);
+      String *an = (pname && Len(pname) > 0) ? NewStringf("%s", pname) : NewStringf("a%d", idx);
+      Replaceall(an, "::", "_");
       if (Len(jargs) > 0) Printf(jargs, ", ");
-      Printf(jargs, "%s::%s", an, jt);
-      Printf(jccall_types, "%s, ", jl_ctype(bt));
-      if (Strcmp(bt, "void *") == 0) {
+      Printf(jargs, "%s::%s", an, jp ? jp : pproxy);
+      Printf(jccall_types, "%s, ", jt);
+      if (!jp && pproxy) {  /* class-typed: pass .ptr, preserve wrapper */
         Printf(jccall_args, "%s.ptr, ", an);
         Printf(preserve, "%s ", an);
       } else {
         Printf(jccall_args, "%s, ", an);
       }
-      Delete(jt); Delete(an);
+      Delete(an); Delete(inputvar);
+      if (pproxy) Delete(pproxy);
+      ++idx;
+      p = Getattr(p, "tmap:in:next") ? Getattr(p, "tmap:in:next") : nextSibling(p);
     }
-    /* trailing comma handling: ccall type tuples need a trailing comma for 1-tuples; always emitting one is valid */
+    if (!ok) {
+      skip(n, "parameter type");
+      DelWrapper(w); Delete(wname);
+      Delete(csig); Delete(jargs); Delete(jccall_types); Delete(jccall_args); Delete(preserve);
+      return SWIG_NOWRAP;
+    }
 
-    const char *jret = jl_ctype(ret_bt);
-    String *callcore = NewStringf(
-        "ccall((:%s, _lib), %s, (%s), %s)",
-        wname, (kind == 2) ? "Ptr{Cvoid}" : jret, jccall_types, jccall_args);
+    /* action: members/ctors/statics arrive pre-transformed by the Language
+       base; plain globals need the default action built here. */
+    if (!Getattr(n, "wrap:action")) {
+      String *call = Swig_cfunction_call(Getattr(n, "name"), parms);
+      Setattr(n, "wrap:action", Swig_cresult(returntype, Swig_cresult_name(), call));
+    }
+    bool is_void = Strcmp(ret_ct, "void") == 0;
+    if (!is_void) emit_return_variable(n, returntype, w);
+    String *actioncode = emit_action(n);
 
-    String *jlfn = NewString("");
-    String *fname = 0;
-    if (kind == 2) {
-      fname = Copy(class_jlname);
-      Printf(jlfn, "%s(%s) = %s(_check(%s))\n", fname, jargs, class_jlname, callcore);
-    } else {
-      fname = Copy(symname);
-      String *self_sig = (kind == 1) ? NewStringf("self::%s%s", class_jlname, Len(jargs) ? ", " : "")
-                       : (kind == 3) ? NewStringf("::Type{%s}%s", class_jlname, Len(jargs) ? ", " : "")
-                       : NewString("");
-      String *body = 0;
-      SwigType *rr = returntype ? SwigType_typedef_resolve_all(returntype) : 0;
-      if (Strcmp(ret_bt, "void *") == 0) {
-        Node *cls = 0;
-        SwigType *base = Copy(rr);
-        if (SwigType_isreference(base)) SwigType_del_reference(base);
-        else if (SwigType_ispointer(base)) SwigType_del_pointer(base);
-        cls = classLookup(base);
-        body = NewStringf("%s(_check(%s))", cls ? Getattr(cls, "sym:name") : "Ptr", callcore);
-        Delete(base);
-      } else if (Strstr(ret_bt, "char *")) {
-        body = NewStringf("_takestr(%s)", callcore);
-      } else if (Strcmp(ret_bt, "unsigned char") == 0) {
-        body = NewStringf("_check(%s) != 0", callcore);
-      } else if (Strcmp(ret_bt, "void") == 0) {
-        body = NewStringf("(%s; _check(nothing))", callcore);
-      } else if (Strcmp(ret_bt, "long long") == 0) {
-        body = NewStringf("Int(_check(%s))", callcore);
-      } else {
-        body = NewStringf("_check(%s)", callcore);
+    String *outtm = 0;
+    if (!is_void) {
+      outtm = Swig_typemap_lookup_out("out", n, Swig_cresult_name(), w, actioncode);
+      if (!outtm) {
+        skip(n, "return conversion");
+        DelWrapper(w); Delete(wname);
+        return SWIG_NOWRAP;
       }
-      if (Len(preserve) > 0)
-        Printf(jlfn, "%s(%s%s) = GC.@preserve %sbegin %s end\n", fname, self_sig, jargs, preserve, body);
-      else
-        Printf(jlfn, "%s(%s%s) = %s\n", fname, self_sig, jargs, body);
-      Delete(self_sig); Delete(body);
-      if (rr) Delete(rr);
+      Replaceall(outtm, "$result", "_outv");
     }
-    Printv(f_jl_body, jlfn, NIL);
-    if (kind == 0 || kind == 3) add_export(fname);
-    Delete(jlfn); Delete(fname);
-    Delete(callcore); Delete(jargs); Delete(jccall_types); Delete(jccall_args);
-    Delete(preserve); Delete(wname); Delete(cargs); Delete(cconv);
-    Delete(ccall_args); Delete(callexpr); Delete(fail_ret);
+
+    Printf(f_wrappers, "extern \"C\" %s %s(%s) {\n  SWIG_JL_ENTER();\n  try {\n",
+           ret_ct, wname, Len(csig) ? Char(csig) : "void");
+    Printv(f_wrappers, w->locals, NIL);
+    if (!is_void) Printf(f_wrappers, "  %s _outv;\n", ret_ct);
+    Printv(f_wrappers, w->code, NIL);
+    if (is_void) {
+      Printv(f_wrappers, actioncode, NIL);
+      Printf(f_wrappers, "  return;\n");
+    } else {
+      Printv(f_wrappers, outtm, "\n", NIL);
+      Printf(f_wrappers, "  return _outv;\n");
+    }
+    Printf(f_wrappers, "  } SWIG_JL_CATCH(%s)\n}\n\n",
+           is_void ? "" : (Strstr(ret_ct, "*") ? "0" : (Strcmp(ret_ct, "double") == 0 ? "0.0" : "0")));
+
+    /* ---- Julia side ---- */
+    String *callcore = NewStringf("ccall((:%s, _lib), %s, (%s), %s)",
+                                  wname, ret_jt, jccall_types, jccall_args);
+    String *body = 0;
+    if (in_ctor) {
+      body = NewStringf("%s(_check(%s))", class_jlname, callcore);
+    } else if (ret_is_class) {
+      body = NewStringf("%s(_check(%s))", ret_proxy, callcore);
+    } else {
+      body = Copy(ret_jlout);
+      Replaceall(body, "$call", callcore);
+    }
+
+    String *fname = in_ctor ? Copy(class_jlname)
+                  : bare_symname ? Copy(bare_symname) : Copy(symname);
+    String *sig = NewString("");
+    if (in_static) Printf(sig, "::Type{%s}%s", class_jlname, Len(jargs) ? ", " : "");
+    Printv(sig, jargs, NIL);
+    if (Len(preserve) > 0)
+      Printf(f_jl_body, "%s(%s) = GC.@preserve %sbegin %s end\n", fname, sig, preserve, body);
+    else
+      Printf(f_jl_body, "%s(%s) = %s\n", fname, sig, body);
+    if (!class_jlname || in_static || in_ctor) add_export(fname);
+
+    Delete(fname); Delete(sig); Delete(body); Delete(callcore);
+    Delete(csig); Delete(jargs); Delete(jccall_types); Delete(jccall_args);
+    Delete(preserve); Delete(wname);
+    if (ret_proxy) Delete(ret_proxy);
+    DelWrapper(w);
     return SWIG_OK;
   }
 
-  void skip(Node *n, const char *why) {
-    ++n_skipped;
-    Printf(f_jl_body, "# skipped %s (%s not yet supported)\n",
-           Getattr(n, "sym:name"), why);
-  }
-
-  /* ---- handlers ---- */
-
-  virtual int globalfunctionHandler(Node *n) {
-    emit_callable(n, 0);
-    return SWIG_OK;
-  }
+  /* ---- context plumbing around the Language base transforms ---- */
 
   virtual int classHandler(Node *n) {
     class_jlname = Getattr(n, "sym:name");
-    class_cname  = Getattr(n, "name");
-    class_has_ctor = false;
+    String *cname = Getattr(n, "name");
 
     Printf(f_jl_body,
       "mutable struct %s\n    ptr::Ptr{Cvoid}\n"
@@ -419,31 +327,40 @@ public:
     Printf(f_wrappers,
       "extern \"C\" void _swig_%s_delete(void *p) {\n"
       "  SWIG_JL_ENTER();\n  try { delete static_cast<%s*>(p); } SWIG_JL_CATCH()\n}\n\n",
-      class_jlname, class_cname);
+      class_jlname, cname);
 
     Language::classHandler(n);
-
     class_jlname = 0;
-    class_cname = 0;
     return SWIG_OK;
   }
 
   virtual int constructorHandler(Node *n) {
-    emit_callable(n, 2);
-    return SWIG_OK;
+    in_ctor = true;
+    int r = Language::constructorHandler(n);
+    in_ctor = false;
+    return r;
   }
 
   virtual int memberfunctionHandler(Node *n) {
-    emit_callable(n, 1);
-    return SWIG_OK;
+    bare_symname = Copy(Getattr(n, "sym:name"));
+    int r = Language::memberfunctionHandler(n);
+    Delete(bare_symname); bare_symname = 0;
+    return r;
   }
 
   virtual int staticmemberfunctionHandler(Node *n) {
-    emit_callable(n, 3);
-    return SWIG_OK;
+    in_static = true;
+    bare_symname = Copy(Getattr(n, "sym:name"));
+    int r = Language::staticmemberfunctionHandler(n);
+    Delete(bare_symname); bare_symname = 0;
+    in_static = false;
+    return r;
   }
 
   virtual int destructorHandler(Node *) { return SWIG_OK; } /* emitted in classHandler */
+  virtual int membervariableHandler(Node *) { return SWIG_OK; }    /* later */
+  virtual int staticmembervariableHandler(Node *) { return SWIG_OK; }
+  virtual int globalvariableHandler(Node *) { return SWIG_OK; }
 };
 
 static Language *new_swig_julia() { return new JULIA(); }
