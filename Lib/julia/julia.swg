@@ -70,3 +70,103 @@
 %typemap(out)    SWIGTYPE* %{ $result = (void*)$1; %}
 %typemap(jltype) SWIGTYPE, SWIGTYPE&, const SWIGTYPE&, SWIGTYPE* "Ptr{Cvoid}"
 /* jlparam / jlout for class types are computed by the backend (proxy name). */
+
+/* ---- jl_value_t* route: composite values cross as native Julia values.
+ * The wrapper compiles against julia.h but does NOT link libjulia; jl_*
+ * symbols resolve from the host process at dlopen.  ccall arguments are
+ * caller-rooted; C-side intermediates use JL_GC_PUSH*. */
+%fragment("SwigJlRuntime", "header") %{
+#include <julia.h>
+#include <vector>
+static std::vector<double> swig_jl_to_vec_double(jl_value_t* v) {
+  if (!jl_is_array(v)) throw std::runtime_error("expected a numeric vector");
+  jl_array_t* a = (jl_array_t*)v;
+  size_t n = jl_array_len(a);
+  std::vector<double> out(n);
+  jl_value_t* eltype = (jl_value_t*)jl_array_eltype(v);
+  if (eltype == (jl_value_t*)jl_float64_type) {
+    double* data = jl_array_data(a, double);
+    for (size_t i = 0; i < n; ++i) out[i] = data[i];
+  } else if (eltype == (jl_value_t*)jl_int64_type) {
+    int64_t* data = jl_array_data(a, int64_t);
+    for (size_t i = 0; i < n; ++i) out[i] = (double)data[i];
+  } else {
+    throw std::runtime_error("expected a Float64/Int64 vector");
+  }
+  return out;
+}
+static std::vector<long long> swig_jl_to_vec_int(jl_value_t* v) {
+  if (!jl_is_array(v)) throw std::runtime_error("expected an integer vector");
+  jl_array_t* a = (jl_array_t*)v;
+  size_t n = jl_array_len(a);
+  std::vector<long long> out(n);
+  if ((jl_value_t*)jl_array_eltype(v) != (jl_value_t*)jl_int64_type)
+    throw std::runtime_error("expected an Int64 vector");
+  int64_t* data = jl_array_data(a, int64_t);
+  for (size_t i = 0; i < n; ++i) out[i] = (long long)data[i];
+  return out;
+}
+static std::vector<std::string> swig_jl_to_vec_string(jl_value_t* v) {
+  if (!jl_is_array(v)) throw std::runtime_error("expected a string vector");
+  jl_array_t* a = (jl_array_t*)v;
+  size_t n = jl_array_len(a);
+  std::vector<std::string> out(n);
+  for (size_t i = 0; i < n; ++i) {
+    jl_value_t* el = jl_array_ptr_ref(a, i);
+    if (!jl_is_string(el)) throw std::runtime_error("expected a string vector");
+    out[i] = std::string(jl_string_ptr(el), jl_string_len(el));
+  }
+  return out;
+}
+static jl_value_t* swig_jl_from_vec_double(const std::vector<double>& v) {
+  jl_value_t* atype = jl_apply_array_type((jl_value_t*)jl_float64_type, 1);
+  jl_array_t* a = jl_alloc_array_1d(atype, v.size());
+  JL_GC_PUSH1(&a);
+  double* data = jl_array_data(a, double);
+  for (size_t i = 0; i < v.size(); ++i) data[i] = v[i];
+  JL_GC_POP();
+  return (jl_value_t*)a;
+}
+static jl_value_t* swig_jl_from_vec_int(const std::vector<long long>& v) {
+  jl_value_t* atype = jl_apply_array_type((jl_value_t*)jl_int64_type, 1);
+  jl_array_t* a = jl_alloc_array_1d(atype, v.size());
+  JL_GC_PUSH1(&a);
+  int64_t* data = jl_array_data(a, int64_t);
+  for (size_t i = 0; i < v.size(); ++i) data[i] = (int64_t)v[i];
+  JL_GC_POP();
+  return (jl_value_t*)a;
+}
+static jl_value_t* swig_jl_from_vec_string(const std::vector<std::string>& v) {
+  jl_value_t* atype = jl_apply_array_type((jl_value_t*)jl_string_type, 1);
+  jl_array_t* a = jl_alloc_array_1d(atype, v.size());
+  JL_GC_PUSH1(&a);
+  for (size_t i = 0; i < v.size(); ++i)
+    jl_array_ptr_set(a, i, jl_cstr_to_string(v[i].c_str()));
+  JL_GC_POP();
+  return (jl_value_t*)a;
+}
+%}
+
+%typemap(ctype, fragment="SwigJlRuntime")  std::vector<double>, const std::vector<double>& "jl_value_t*"
+%typemap(in)     std::vector<double> %{ $1 = swig_jl_to_vec_double($input); %}
+%typemap(in)     const std::vector<double>& (std::vector<double> tmp) %{ tmp = swig_jl_to_vec_double($input); $1 = &tmp; %}
+%typemap(out)    std::vector<double>, const std::vector<double>& %{ $result = swig_jl_from_vec_double($1); %}
+%typemap(jltype) std::vector<double>, const std::vector<double>& "Any"
+%typemap(jlparam) std::vector<double>, const std::vector<double>& "AbstractVector{<:Real}"
+%typemap(jlout)  std::vector<double>, const std::vector<double>& "_check($call)::Vector{Float64}"
+
+%typemap(ctype, fragment="SwigJlRuntime")  std::vector<long long>, const std::vector<long long>&, std::vector<casadi_int>, const std::vector<casadi_int>& "jl_value_t*"
+%typemap(in)     std::vector<long long> %{ $1 = swig_jl_to_vec_int($input); %}
+%typemap(in)     const std::vector<long long>& (std::vector<long long> tmp) %{ tmp = swig_jl_to_vec_int($input); $1 = &tmp; %}
+%typemap(out)    std::vector<long long>, const std::vector<long long>& %{ $result = swig_jl_from_vec_int($1); %}
+%typemap(jltype) std::vector<long long>, const std::vector<long long>&, std::vector<casadi_int>, const std::vector<casadi_int>& "Any"
+%typemap(jlparam) std::vector<long long>, const std::vector<long long>&, std::vector<casadi_int>, const std::vector<casadi_int>& "AbstractVector{<:Integer}"
+%typemap(jlout)  std::vector<long long>, const std::vector<long long>& "_check($call)::Vector{Int64}"
+
+%typemap(ctype, fragment="SwigJlRuntime")  std::vector<std::string>, const std::vector<std::string>& "jl_value_t*"
+%typemap(in)     std::vector<std::string> %{ $1 = swig_jl_to_vec_string($input); %}
+%typemap(in)     const std::vector<std::string>& (std::vector<std::string> tmp) %{ tmp = swig_jl_to_vec_string($input); $1 = &tmp; %}
+%typemap(out)    std::vector<std::string>, const std::vector<std::string>& %{ $result = swig_jl_from_vec_string($1); %}
+%typemap(jltype) std::vector<std::string>, const std::vector<std::string>& "Any"
+%typemap(jlparam) std::vector<std::string>, const std::vector<std::string>& "AbstractVector{<:AbstractString}"
+%typemap(jlout)  std::vector<std::string>, const std::vector<std::string>& "_check($call)::Vector{String}"
