@@ -648,6 +648,29 @@ public:
            then run the same expand+merge+emit as for globals so the flattened
            overloads are disambiguated for the derived class too. */
         Hash *dmeth = NewHash(); List *dorder = NewList();
+        /* Collision keys of the derived class's OWN members. A base-class
+           forwarder must not be emitted for a signature the derived class
+           already defines: its own definition is emitted earlier, so the
+           forwarder would silently overwrite the override (and, since Julia
+           1.12, break precompilation outright -- "Method overwriting is not
+           permitted during Module precompilation"). The statics path below
+           already guards this way. */
+        Hash *ownkeys = NewHash();
+        {
+          List *oml = class_members ? (List *)Getattr(class_members, derived) : 0;
+          if (oml) {
+            for (int mi = 0; mi < Len(oml); ++mi) {
+              Hash *src = (Hash *)Getitem(oml, mi);
+              List *nn = NewList(), *tt = NewList(), *dd = NewList();
+              split_signature(Getattr(src, "sig"), nn, tt, dd);
+              String *st = NewString("");
+              for (int z = 0; z < Len(tt); ++z) Printf(st, "%s,", (String *)Getitem(tt, z));
+              String *key = NewStringf("%s|%s", Getattr(src, "fname"), st);
+              Setattr(ownkeys, key, "1");
+              Delete(nn); Delete(tt); Delete(dd); Delete(st); Delete(key);
+            }
+          }
+        }
         for (int qi = 0; qi < Len(queue); ++qi) {
           String *b = (String *)Getitem(queue, qi);
           if (Getattr(seen, b)) continue;
@@ -677,6 +700,11 @@ public:
               String *st = NewString("");
               for (int z = 0; z < Len(tt); ++z) Printf(st, "%s,", (String *)Getitem(tt, z));
               String *key = NewStringf("%s|%s", Getattr(src, "fname"), st);
+              if (Getattr(ownkeys, key)) {   /* derived overrides it; keep its own */
+                Delete(de);
+                Delete(nn); Delete(tt); Delete(dd); Delete(st); Delete(key);
+                continue;
+              }
               List *gl = (List *)Getattr(dmeth, key);
               if (!gl) { gl = NewList(); Setattr(dmeth, key, gl); Append(dorder, Copy(key)); }
               Append(gl, de);
@@ -706,7 +734,7 @@ public:
           Delete(jl_methods); Delete(jl_method_order);
           jl_methods = save_m; jl_method_order = save_o;
         }
-        Delete(queue); Delete(seen);
+        Delete(queue); Delete(seen); Delete(ownkeys);
         ci = Next(ci);
       }
     }
