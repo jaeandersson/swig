@@ -1656,7 +1656,7 @@ public:
       }
       Printf(w->code,
         "  jl_value_t *__self = swig_get_self();\n"
-        "  jl_function_t *__f = Swig::swig_director_fn(\"%s\");\n", dispatch);
+        "  jl_value_t *__f = Swig::swig_director_fn(\"%s\");\n", dispatch);
       Printf(w->code, "  if (__self && __f) {\n");
       Printf(w->code, "    jl_value_t **__jargs;\n");
       Printf(w->code, "    JL_GC_PUSHARGS(__jargs, %d);\n", nargs + 1);

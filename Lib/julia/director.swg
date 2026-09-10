@@ -30,7 +30,7 @@ extern "C" void swig_jl_set_module(jl_value_t *m) {
 
 namespace Swig {
   /* Look up a director dispatch function `name` in the registered module. */
-  inline jl_function_t *swig_director_fn(const char *name) {
+  inline jl_value_t *swig_director_fn(const char *name) {
     jl_module_t *m = swig_jl_director_module ? swig_jl_director_module : jl_main_module;
     return jl_get_function(m, name);
   }
@@ -58,8 +58,8 @@ namespace Swig {
     if (!e) return std::string();
     std::string msg;
     JL_GC_PUSH1(&e);
-    jl_function_t *sprintf_fn = jl_get_function(jl_base_module, "sprint");
-    jl_function_t *showerror_fn = jl_get_function(jl_base_module, "showerror");
+    jl_value_t *sprintf_fn = jl_get_function(jl_base_module, "sprint");
+    jl_value_t *showerror_fn = jl_get_function(jl_base_module, "showerror");
     if (sprintf_fn && showerror_fn) {
       jl_value_t *s = jl_call2(sprintf_fn, (jl_value_t *)showerror_fn, e);
       if (s && jl_is_string(s)) msg = jl_string_ptr(s);

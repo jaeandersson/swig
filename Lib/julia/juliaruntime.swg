@@ -85,7 +85,7 @@ SWIGRUNTIME jl_value_t* swig_jl_new_pointer_obj(void* ptr, swig_type_info* type)
     if (it != swig_jl_ti2type().end()) {
       jl_value_t* boxed = jl_box_voidpointer(ptr);
       JL_GC_PUSH1(&boxed);
-      jl_value_t* r = jl_call1((jl_function_t*)it->second, boxed);  /* proxy w/ finalizer */
+      jl_value_t* r = jl_call1((jl_value_t*)it->second, boxed);  /* proxy w/ finalizer */
       JL_GC_POP();
       return r;
     }
@@ -102,7 +102,7 @@ SWIGRUNTIME jl_value_t* swig_jl_new_pointer_obj(void* ptr, swig_type_info* type)
 SWIGRUNTIME jl_value_t* SWIG_AppendOutput(jl_value_t* cur, jl_value_t* x) {
   if (!cur) return x;
   JL_GC_PUSH2(&cur, &x);
-  jl_function_t* tuple_f = jl_get_function(jl_core_module, "tuple");
+  jl_value_t* tuple_f = jl_get_function(jl_core_module, "tuple");
   jl_value_t* r;
   if (jl_is_tuple(cur)) {
     size_t n = jl_nfields(cur);
