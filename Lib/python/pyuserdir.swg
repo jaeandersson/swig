@@ -52,7 +52,7 @@
  */
 /* %stub_alias_in(NAME, TYPES...)
  *
- * Emits a PEP-484 TypeAlias `_NAME = TYPES` in the stub preamble and
+ * Emits a PEP-484 `_NAME: TypeAlias = TYPES` in the stub preamble and
  * registers `NAME → _NAME` so pystub tokens get substituted at emit
  * time.  Reference aliases in hand-written stubs by the emitted name:
  *
@@ -66,7 +66,7 @@
  *   %stub_alias_in(SX, SX | _SupportsSX | _DM)
  */
 %define %stub_alias_in(NAME, TYPES...)
-%insert("stubs_preamble") %{_##NAME = TYPES
+%insert("stubs_preamble") %{_##NAME: TypeAlias = TYPES
 %}
 %insert("stubs_alias_in_table") %{NAME=_##NAME
 %}
