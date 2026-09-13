@@ -29,7 +29,7 @@
  *    %stub_method0(__len__, int)
  *    %stub_overload_method(__call__, %arg(Mapping[str, int]), **kw: int)
  *    %stub_overload_func(sin, float, x: float)
- *    %stub_attr(shape, tuple[int, int])
+ *    %stub_attr(shape, tuple[int, int])   # read-only: emitted as @property
  *    %stub_class_begin(Foo)   # use for pure-%pythoncode classes
  * ------------------------------------------------------------------------- */
 
@@ -136,8 +136,10 @@ def NAME(ARGS) -> RET: ...
 %}
 %enddef
 
+/* A read-only attribute (a Python-side @property or a C++ getter). */
 %define %stub_attr(NAME, TYPE...)
-%stubcode %{    NAME: TYPE
+%stubcode %{    @property
+    def NAME(self) -> TYPE: ...
 %}
 %enddef
 

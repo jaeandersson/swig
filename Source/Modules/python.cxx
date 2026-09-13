@@ -3227,6 +3227,9 @@ public:
      * members keep plain `NAME: TYPE`. */
     if (Len(indent) == 0)
       Printv(f_stubs, symname, ": ", rendered, " = ...\n", NIL);
+    else if (is_immutable(n))
+      /* The shadow exposes it as a getter-only property. */
+      Printv(f_stubs, indent, "@property\n", indent, "def ", symname, "(self) -> ", rendered, ": ...\n", NIL);
     else
       Printv(f_stubs, indent, symname, ": ", rendered, "\n", NIL);
     Delete(rendered);
