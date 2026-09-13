@@ -2744,7 +2744,24 @@ public:
       return resolveStub(pystub_any, is_output);
     /* SWIG-builtin fallback */
     String *tdoc = Getattr(pj, "tmap:in:doc");
-    return tdoc ? stubType(tdoc, is_output) : NewString("Any");
+    if (tdoc) return stubType(tdoc, is_output);
+    return stubPrimitive(Getattr(pj, "type"));
+  }
+
+  /* A C primitive with no doc/pystub typemap (e.g. a plain `int`
+   * overload of a `long long` API) still has an obvious Python type. */
+  String *stubPrimitive(SwigType *type) {
+    if (!type) return NewString("Any");
+    SwigType *r = SwigType_typedef_resolve_all(type);
+    SwigType *t = SwigType_strip_qualifiers(r);
+    if (SwigType_isreference(t)) SwigType_del_reference(t);
+    int tc = SwigType_type(t);
+    Delete(r); Delete(t);
+    if (tc == T_BOOL) return NewString("bool");
+    if (tc >= T_SCHAR && tc <= T_ULONGLONG) return NewString("int");
+    if (tc == T_FLOAT || tc == T_DOUBLE || tc == T_LONGDOUBLE) return NewString("float");
+    if (tc == T_STRING) return NewString("builtins.str");
+    return NewString("Any");
   }
 
   /* Forward-declare: recursive type token translation */
@@ -2856,7 +2873,7 @@ public:
    * populate_docParmList uses) so we can read each parm's default
    * value alongside its typemap doc string. */
   void stubWriteSignature(String *f, const String *indent, Node *ni,
-                          bool needs_self, bool is_constructor) {
+                          bool needs_self, bool is_constructor, List *ann_out = 0) {
     String *name = is_constructor ? NewString("__init__") : Copy(Swig_symname(ni));
 
     /* Expand SWIG defaultargs alias if present — matches make_pyParmList. */
@@ -2897,6 +2914,7 @@ public:
           Append(out_types, resolved);
         } else if (!is_self) {
           String *rendered = eq_object ? NewString("object") : pickStub(pj, false);
+          if (ann_out) Append(ann_out, rendered);
           if (!first) Printv(f, ", ", NIL);
           Printv(f, pname ? Char(pname) : "_", ": ", rendered, NIL);
           String *pvalue = Getattr(pj, "value");
@@ -3013,18 +3031,102 @@ public:
       nfunc = 1;
     }
 
+    /* Render every overload first.  SWIG ranks overloads by runtime
+     * typecheck precedence, which is not the order a type checker wants:
+     * an overload that reads as a subset of an earlier one is dead to it.
+     * So drop signatures that render identically (const/non-const C++
+     * pairs, int/long variants) and hoist an overload above any earlier
+     * one it is strictly narrower than (`str` before `Sequence[...]`,
+     * anything before `Any`). */
+    List *sigs = NewList();
+    List *anns = NewList();
+    Hash *seen = NewHash();
     for (int i = 0; i < nfunc; ++i) {
       Node *ni = Getitem(dispatch, i);
-      if (nfunc > 1)
+      String *sig = NewString("");
+      List *ann = NewList();
+      stubWriteSignature(sig, indent, ni, kind == 1, kind == 3, ann);
+      if (Getattr(seen, sig)) { Delete(sig); Delete(ann); continue; }
+      Setattr(seen, sig, "1");
+      int pos = Len(sigs);
+      for (int j = 0; j < Len(sigs); ++j)
+        if (stubNarrower(ann, Getitem(anns, j))) { pos = j; break; }
+      Insert(sigs, pos, sig);
+      Insert(anns, pos, ann);
+    }
+    int nsig = Len(sigs);
+    for (int i = 0; i < nsig; ++i) {
+      if (nsig > 1)
         Printv(f_stubs, indent, "@overload\n", NIL);
       if (kind == 2)
         Printv(f_stubs, indent, "@staticmethod\n", NIL);
-      bool needs_self = (kind == 1);
-      bool is_ctor = (kind == 3);
-      stubWriteSignature(f_stubs, indent, ni, needs_self, is_ctor);
+      Printv(f_stubs, Getitem(sigs, i), NIL);
     }
+    Delete(sigs); Delete(anns); Delete(seen);
     if (kind != 0 /* free */ ) f_stubs_class_members++;
     if (single) Delete(single);
+  }
+
+  /* Split a rendered annotation on top-level `|`. */
+  static List *stubUnionMembers(const String *t) {
+    List *out = NewList();
+    const char *c = Char((String *)t);
+    int depth = 0, start = 0, n = Len(t);
+    for (int i = 0; i <= n; ++i) {
+      if (i < n && (c[i] == '[' || c[i] == '(')) depth++;
+      else if (i < n && (c[i] == ']' || c[i] == ')')) depth--;
+      else if (i == n || (c[i] == '|' && depth == 0)) {
+        int a = start, b = i;
+        while (a < b && c[a] == ' ') a++;
+        while (b > a && c[b - 1] == ' ') b--;
+        Append(out, NewStringWithSize(c + a, b - a));
+        start = i + 1;
+      }
+    }
+    return out;
+  }
+
+  /* x is at least as narrow as y.  Only the subset relations a stub
+   * emitter can be sure of: identity, Any, the numeric tower, str as a
+   * Sequence, Sequence[a] within Sequence[b], and unions member-wise. */
+  static bool stubNarrowerOrEqual(const String *x, const String *y) {
+    if (Equal(x, y) || Equal(y, "Any")) return true;
+    List *xs = stubUnionMembers(x), *ys = stubUnionMembers(y);
+    bool ok = true;
+    if (Len(xs) > 1 || Len(ys) > 1) {
+      for (int i = 0; ok && i < Len(xs); ++i) {
+        bool found = false;
+        for (int j = 0; !found && j < Len(ys); ++j)
+          found = stubNarrowerOrEqual(Getitem(xs, i), Getitem(ys, j));
+        ok = found;
+      }
+    } else {
+      bool x_str = Equal(x, "str") || Equal(x, "builtins.str");
+      bool x_seq = Strncmp(x, "Sequence[", 9) == 0, y_seq = Strncmp(y, "Sequence[", 9) == 0;
+      if (Equal(x, "bool")) ok = Equal(y, "int") || Equal(y, "float");
+      else if (Equal(x, "int")) ok = Equal(y, "float");
+      else if (x_str) ok = y_seq;
+      else if (x_seq && y_seq) {
+        String *xi = NewStringWithSize(Char((String *)x) + 9, Len(x) - 10);
+        String *yi = NewStringWithSize(Char((String *)y) + 9, Len(y) - 10);
+        ok = stubNarrowerOrEqual(xi, yi);
+        Delete(xi); Delete(yi);
+      } else ok = false;
+    }
+    Delete(xs); Delete(ys);
+    return ok;
+  }
+
+  /* Every parameter of `a` at least as narrow as `b`'s, one strictly. */
+  static bool stubNarrower(List *a, List *b) {
+    if (Len(a) != Len(b)) return false;
+    bool strict = false;
+    for (int i = 0; i < Len(a); ++i) {
+      String *x = Getitem(a, i), *y = Getitem(b, i);
+      if (!stubNarrowerOrEqual(x, y)) return false;
+      if (!stubNarrowerOrEqual(y, x)) strict = true;
+    }
+    return strict;
   }
 
   /* Drain the %insert("stubs_alias_{in,out}_table") buffer — each line
