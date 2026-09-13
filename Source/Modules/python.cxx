@@ -2742,9 +2742,11 @@ public:
     String *pystub_any = Getattr(pj, "tmap:in:pystub");
     if (pystub_any && Len(pystub_any) > 0)
       return resolveStub(pystub_any, is_output);
-    /* SWIG-builtin fallback */
+    /* SWIG-builtin fallback: the doc string, then the C type itself. */
     String *tdoc = Getattr(pj, "tmap:in:doc");
-    if (tdoc) return stubType(tdoc, is_output);
+    String *out = tdoc ? stubType(tdoc, is_output) : 0;
+    if (out && !Equal(out, "Any")) return out;
+    Delete(out);
     return stubPrimitive(Getattr(pj, "type"));
   }
 
@@ -2756,12 +2758,27 @@ public:
     SwigType *t = SwigType_strip_qualifiers(r);
     if (SwigType_isreference(t)) SwigType_del_reference(t);
     int tc = SwigType_type(t);
-    Delete(r); Delete(t);
-    if (tc == T_BOOL) return NewString("bool");
-    if (tc >= T_SCHAR && tc <= T_ULONGLONG) return NewString("int");
-    if (tc == T_FLOAT || tc == T_DOUBLE || tc == T_LONGDOUBLE) return NewString("float");
-    if (tc == T_STRING) return NewString("builtins.str");
-    return NewString("Any");
+    Delete(r);
+    String *out = 0;
+    if (tc == T_BOOL) out = NewString("bool");
+    else if (tc >= T_SCHAR && tc <= T_ULONGLONG) out = NewString("int");
+    else if (tc == T_FLOAT || tc == T_DOUBLE || tc == T_LONGDOUBLE) out = NewString("float");
+    else if (tc == T_STRING) out = NewString("builtins.str");
+    else if (tc == T_POINTER) {
+      /* char* / const char* */
+      SwigType *base = Copy(t);
+      SwigType_del_pointer(base);
+      SwigType *ub = SwigType_strip_qualifiers(base);
+      if (Equal(ub, "char")) out = NewString("builtins.str");
+      Delete(base); Delete(ub);
+    } else if (tc == T_USER) {
+      /* A wrapped class (e.g. the %copyctor parameter). */
+      Node *cls = classLookup(t);
+      String *sym = cls ? Getattr(cls, "sym:name") : 0;
+      if (sym) out = Copy(sym);
+    }
+    Delete(t);
+    return out ? out : NewString("Any");
   }
 
   /* Forward-declare: recursive type token translation */
@@ -2957,7 +2974,9 @@ public:
           String *ret_fallback = 0;
           if (!ret_doc) {
             SwigType *rt = Getattr(source, "type");
-            if (rt) {
+            String *prim = rt ? stubPrimitive(rt) : 0;
+            if (prim && !Equal(prim, "Any")) ret_fallback = prim;
+            else if (rt) {
               String *sname = SwigType_namestr(rt);
               if (sname) {
                 const char *cs = Char(sname);
@@ -2968,11 +2987,24 @@ public:
                 Delete(sname);
               }
             }
+            if (prim && ret_fallback != prim) Delete(prim);
             ret_doc = ret_fallback;
           }
           ret_stub = ret_doc ? stubType(ret_doc, true) : NewString("Any");
+          if (Equal(ret_stub, "Any")) {
+            SwigType *rt = Getattr(source, "type");
+            String *p2 = rt ? stubPrimitive(rt) : 0;
+            if (p2 && !Equal(p2, "Any")) { Delete(ret_stub); ret_stub = p2; }
+            else Delete(p2);
+          }
           if (ret_fallback) Delete(ret_fallback);
         }
+      }
+      /* An in-place operator hands back its own object: Self. */
+      if (needs_self && Strncmp(name, "__i", 3) == 0 && ret_stub) {
+        Node *cls = Getattr(ni, "parentNode");
+        String *cname = cls ? Getattr(cls, "sym:name") : 0;
+        if (cname && Equal(ret_stub, cname)) { Delete(ret_stub); ret_stub = NewString("Self"); }
       }
       int n_extra = Len(out_types);
 
