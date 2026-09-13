@@ -3215,6 +3215,50 @@ public:
   /* Emit a module-level or class-level attribute annotation.
    * For variables we use the raw C type (via SwigType_str) only as
    * a last resort — we haven't got a doc= channel for variables. */
+  /* Enumerator values SWIG can settle without a compiler: an integer
+   * literal, or the parser's `<prev> + 1` chain from a known start.
+   * Returns the value as a string, or 0 when it cannot be settled. */
+  Hash *stub_enum_values = 0;
+  String *stubEnumValue(Node *n) {
+    if (!Equal(nodeType(n), "enumitem")) return 0;
+    if (!stub_enum_values) stub_enum_values = NewHash();
+    String *name = Getattr(n, "name");
+    String *ev = Getattr(n, "enumvalue");
+    String *ex = Getattr(n, "enumvalueex");
+    const char *e = ev ? Char(ev) : ex ? Char(ex) : 0;
+    if (!e) return 0;
+    long long v = 0;
+    bool ok = false;
+    char *end = 0;
+    v = strtoll(e, &end, 0);
+    if (end != e && *end == '\0') {
+      ok = true;
+    } else {
+      /* `<name> + <int>`, where <name> is an enumerator settled earlier */
+      const char *plus = strchr(e, '+');
+      if (plus) {
+        String *lhs = NewStringWithSize(e, (int)(plus - e));
+        Chop(lhs);
+        String *known = Getattr(stub_enum_values, lhs);
+        if (known) {
+          long long inc = strtoll(plus + 1, &end, 0);
+          if (end != plus + 1 && *end == '\0') { v = atoll(Char(known)) + inc; ok = true; }
+        }
+        Delete(lhs);
+      }
+    }
+    if (!ok) return 0;
+    String *out = NewStringf("%lld", v);
+    /* The node name is namespace-qualified by now; the parser's
+     * `<prev> + 1` expression uses the bare enumerator. */
+    if (name) {
+      String *bare = Swig_scopename_last(name);
+      Setattr(stub_enum_values, bare, out);
+      Delete(bare);
+    }
+    return out;
+  }
+
   void stubEmitVariable(Node *n, const String *indent) {
     if (!stubs || !f_stubs) return;
     String *symname = Getattr(n, "sym:name");
@@ -3257,14 +3301,18 @@ public:
      * doesn't flag re-imports (e.g. `from numpy import *` after
      * `from casadi import *`) as reassignments of a Final.  Class-body
      * members keep plain `NAME: TYPE`. */
+    String *value = stubEnumValue(n);
     if (Len(indent) == 0)
-      Printv(f_stubs, symname, ": ", rendered, " = ...\n", NIL);
+      Printv(f_stubs, symname, ": ", rendered, " = ", value ? value : "...", "\n", NIL);
+    else if (value)
+      Printv(f_stubs, indent, symname, ": ", rendered, " = ", value, "\n", NIL);
     else if (is_immutable(n))
       /* The shadow exposes it as a getter-only property. */
       Printv(f_stubs, indent, "@property\n", indent, "def ", symname, "(self) -> ", rendered, ": ...\n", NIL);
     else
       Printv(f_stubs, indent, symname, ": ", rendered, "\n", NIL);
     Delete(rendered);
+    Delete(value);
     f_stubs_class_members++;
   }
 
