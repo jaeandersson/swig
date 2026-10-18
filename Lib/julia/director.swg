@@ -24,7 +24,7 @@
 /* The Julia module that owns the generated director dispatch functions.
    Set from Julia __init__ via swig_jl_set_module(@__MODULE__). */
 static jl_module_t *swig_jl_director_module = 0;
-extern "C" void swig_jl_set_module(jl_value_t *m) {
+extern "C" SWIGEXPORT void swig_jl_set_module(jl_value_t *m) {
   swig_jl_director_module = (jl_module_t *)m;
 }
 

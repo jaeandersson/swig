@@ -562,7 +562,6 @@ public:
     Swig_register_filebyname("director",   f_directors);
     Swig_register_filebyname("director_h", f_directors_h);
     /* director runtime (Swig::Director base) before the core fills runtime */
-    if (Swig_directors_enabled()) Swig_insert_file("director.swg", f_runtime);
 
     Swig_banner(f_begin);
     Printf(f_runtime,
@@ -574,17 +573,21 @@ public:
       "#define SWIG_JL_CATCH(ret) \\\n"
       "  catch (const std::exception& e) { swig_jl_err_code = 1; swig_jl_err_msg = e.what(); return ret; } \\\n"
       "  catch (...) { swig_jl_err_code = 1; swig_jl_err_msg = \"unknown C++ exception\"; return ret; }\n"
-      "static char* swig_jl_strdup(const std::string& s) { char* p = (char*)malloc(s.size()+1); memcpy(p, s.c_str(), s.size()+1); return p; }\n"
+      "static char* swig_jl_strdup(const std::string& s) { char* p = (char*)malloc(s.size()+1); memcpy(p, s.c_str(), s.size()+1); return p; }\n\n");
+    /* f_header follows swiglabels.swg, which defines SWIGEXPORT */
+    Printf(f_header,
       "extern \"C\" {\n"
-      "int swig_jl_last_error_code() { return swig_jl_err_code; }\n"
-      "const char* swig_jl_last_error_msg() { return swig_jl_err_msg.c_str(); }\n"
-      "void swig_jl_str_free(char* p) { free(p); }\n"
+      "SWIGEXPORT int swig_jl_last_error_code() { return swig_jl_err_code; }\n"
+      "SWIGEXPORT const char* swig_jl_last_error_msg() { return swig_jl_err_msg.c_str(); }\n"
+      "SWIGEXPORT void swig_jl_str_free(char* p) { free(p); }\n"
       "}\n\n");
 
     Language::top(n);
+    /* after swiglabels.swg (inserted by top), so SWIGEXPORT is defined */
+    if (Swig_directors_enabled()) Swig_insert_file("director.swg", f_runtime);
 
     SwigType_emit_type_table(f_runtime, f_wrappers);
-    Printf(f_init, "extern \"C\" void _swig_jl_init_types() {\n  SWIG_InitializeModule(0);\n%s}\n", f_type_init);
+    Printf(f_init, "extern \"C\" SWIGEXPORT void _swig_jl_init_types() {\n  SWIG_InitializeModule(0);\n%s}\n", f_type_init);
 
     Dump(f_runtime, f_begin);
     Dump(f_header, f_begin);
@@ -1108,7 +1111,7 @@ public:
     }
     bool has_probe = Len(probe_body) > 0;
     if (has_probe) {
-      Printf(f_wrappers, "extern \"C\" int _swig_can_%s(%s) {\n  SWIG_JL_ENTER();\n  try {\n%s  return 1;\n  } SWIG_JL_CATCH(0)\n}\n\n",
+      Printf(f_wrappers, "extern \"C\" SWIGEXPORT int _swig_can_%s(%s) {\n  SWIG_JL_ENTER();\n  try {\n%s  return 1;\n  } SWIG_JL_CATCH(0)\n}\n\n",
              wname, Len(csig) ? Char(csig) : "void", probe_body);
     }
     Delete(probe_body);
@@ -1195,7 +1198,7 @@ public:
       Replaceall(outtm, "$result", "_outv");
     }
 
-    Printf(f_wrappers, "extern \"C\" %s %s(%s) {\n  SWIG_JL_ENTER();\n  try {\n",
+    Printf(f_wrappers, "extern \"C\" SWIGEXPORT %s %s(%s) {\n  SWIG_JL_ENTER();\n  try {\n",
            ret_ct, wname, Len(csig) ? Char(csig) : "void");
     Printv(f_wrappers, w->locals, NIL);
     if (!is_void) Printf(f_wrappers, "  %s _outv%s;\n", ret_ct, argout_mode ? " = 0" : "");
@@ -1352,7 +1355,7 @@ public:
       Delete(mangled); Delete(ct);
     }
     Printf(f_wrappers,
-      "extern \"C\" void _swig_%s_delete(void *p) {\n"
+      "extern \"C\" SWIGEXPORT void _swig_%s_delete(void *p) {\n"
       "  SWIG_JL_ENTER();\n  try { delete static_cast<%s*>(p); } SWIG_JL_CATCH()\n}\n\n",
       class_jlname, cxxname);
     Delete(cxxname);
@@ -1483,13 +1486,13 @@ public:
     String *cref = (class_jlname && Getattr(n, "name")) ? Getattr(n, "name") : value;
     if (Strcmp(ts, "int") == 0 || Strcmp(ts, "long") == 0 || Strstr(ts, "long long")) {
       /* value may be a C++ qualified name (casadi::OP_ADD); emit a C getter */
-      Printf(f_wrappers, "extern \"C\" long long _swig_const_%s() { return (long long)(%s); }\n",
+      Printf(f_wrappers, "extern \"C\" SWIGEXPORT long long _swig_const_%s() { return (long long)(%s); }\n",
              symname, cref);
       Printf(f_jl_body, "const %s = Int(ccall((:_swig_const_%s, _lib), Clonglong, ()))\n",
              symname, symname);
       add_export(symname);
     } else if (Strcmp(ts, "double") == 0) {
-      Printf(f_wrappers, "extern \"C\" double _swig_const_%s() { return (double)(%s); }\n",
+      Printf(f_wrappers, "extern \"C\" SWIGEXPORT double _swig_const_%s() { return (double)(%s); }\n",
              symname, cref);
       Printf(f_jl_body, "const %s = ccall((:_swig_const_%s, _lib), Cdouble, ())\n",
              symname, symname);
@@ -1526,7 +1529,7 @@ public:
      so the (dead) auto-generated `new SwigDirector_C()` branch also compiles. */
   void emit_director_construct(String *supername, String *cxxname) {
     Printf(f_wrappers,
-      "extern \"C\" void* _swig_new_SwigDirector_%s(jl_value_t *self) {\n"
+      "extern \"C\" SWIGEXPORT void* _swig_new_SwigDirector_%s(jl_value_t *self) {\n"
       "  SWIG_JL_ENTER();\n  try { return static_cast<void*>(new SwigDirector_%s(self)); }\n"
       "  SWIG_JL_CATCH(0)\n}\n\n", supername, supername);
     /* construct a proxy from the director pointer (self rooted by Swig::Director) */
