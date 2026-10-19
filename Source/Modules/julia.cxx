@@ -979,7 +979,9 @@ public:
     if (!ret_jt) ret_jt = Getattr(retp, "tmap:jltype");
     String *ret_jlout = Getattr(retp, "tmap:jlout");
     String *ret_proxy = proxy_name(returntype);
-    bool ret_is_class = ret_proxy != 0;
+    /* an explicit jlout typemap on a class return (e.g. a typedef meant to come
+       back as a native Julia value) overrides wrapping it in the proxy */
+    bool ret_is_class = ret_proxy != 0 && !ret_jlout;
     /* std::vector/std::pair returns: the typemap matcher won't generalise
        instantiated template args to SWIGTYPE, so synthesise the marshaling. */
     String *synth_out = 0;
