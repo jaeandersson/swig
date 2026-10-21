@@ -203,27 +203,12 @@ namespace swig
 
     operator T () const
     {
-      //      swig::SwigVar_PyObject item = MatlabSequence_GetItem(_seq, _index);
-      mxArray* item; // * todo
-      try {
-	return swig::as<T>(item, true);
-      } catch (std::exception& e) {
-	char msg[1024];
-	sprintf(msg, "in sequence element %d ", _index);
-	if (!Matlab_Error_Occurred()) {
-	  %type_error(swig::type_name<T>());
-	}
-	SWIG_Matlab_AddErrorMsg(msg);
-	SWIG_Matlab_AddErrorMsg(e.what());
-	throw;
-      }
+      return swig::as<T>(mxGetCell(_seq, _index), true);
     }
 
-    MatlabSequence_Ref& operator=(const T& v)
+    MatlabSequence_Ref& operator=(const T&)
     {
-      //      MatlabSequence_SetItem(_seq, _index, swig::from<T>(v));
-      // * todo
-      return *this;
+      throw std::invalid_argument("cannot assign to a MATLAB cell element");
     }
 
   private:
@@ -350,14 +335,9 @@ namespace swig
 
     MatlabSequence_Cont(mxArray* const seq) : _seq(seq)
     {
-      // * assert that we have map type etc.
-      /*
-      if (!MatlabSequence_Check(seq)) {
-	throw std::invalid_argument("a sequence is expected");
+      if (!seq || !mxIsCell(seq)) {
+	throw std::invalid_argument("a cell is expected");
       }
-      _seq = seq;
-      Py_INCREF(_seq);
-      */
     }
 
     ~MatlabSequence_Cont()
@@ -366,8 +346,7 @@ namespace swig
 
     size_type size() const
     {
-      //      return static_cast<size_type>(MatlabSequence_Size(_seq));
-      return 0; // * todo
+      return static_cast<size_type>(mxGetNumberOfElements(_seq));
     }
 
     bool empty() const
@@ -409,13 +388,9 @@ namespace swig
     {
       int s = size();
       for (int i = 0; i < s; ++i) {
-	//	swig::SwigVar_PyObject item = MatlabSequence_GetItem(_seq, i);
-	mxArray* item; // * todo
-	if (!swig::check<value_type>(item)) {
+	if (!swig::check<value_type>(mxGetCell(_seq, i))) {
 	  if (set_err) {
-	    char msg[1024];
-	    sprintf(msg, "in sequence element %d", i);
-	    SWIG_Error(SWIG_RuntimeError, msg);
+	    SWIG_Error_Format(SWIG_TypeError, "in sequence element %d", i);
 	  }
 	  return false;
 	}
@@ -541,9 +516,180 @@ namespace swig
 // Common fragments
 //
 
+/* Native MATLAB arrays accepted for, and returned from, sequences of T besides
+   cells.  Default: none (cells only).  Specializations: numeric and logical
+   vectors for arithmetic T, char matrices (one string per row) and string
+   arrays for std::string. */
+
+%fragment("MatlabArrayTraits","header",fragment="StdTraits")
+{
+%#include <limits>
+%#include <cmath>
+namespace swig {
+  struct matlab_array_traits_none {
+    // Owned replacement to convert instead of obj, or 0
+    static mxArray* prepare(mxArray*) { return 0; }
+    // obj is a native array of T
+    static bool check(mxArray*) { return false; }
+    static size_t size(mxArray*) { return 0; }
+    // Convert element i and append it to seq (seq==0: check only)
+    template <class Seq>
+    static bool append(mxArray*, size_t, Seq*) { return false; }
+    // Native array for n elements, or 0 to return a cell
+    static mxArray* create(size_t) { return 0; }
+    template <class U>
+    static void set(mxArray*, size_t, const U&) {}
+  };
+
+  template <class T>
+  struct matlab_array_traits : matlab_array_traits_none {};
+
+  inline bool matlab_is_vector_shape(mxArray* obj) {
+    return mxGetNumberOfDimensions(obj)==2 && (mxGetM(obj)<=1 || mxGetN(obj)<=1);
+  }
+
+  // Real, non-sparse numeric or logical vector
+  inline bool matlab_is_numeric_vector(mxArray* obj) {
+    return obj && (mxIsNumeric(obj) || mxIsLogical(obj)) && !mxIsComplex(obj)
+      && !mxIsSparse(obj) && matlab_is_vector_shape(obj);
+  }
+
+  inline double matlab_double_element(mxArray* obj, size_t i) {
+    const void* d = mxGetData(obj);
+    switch (mxGetClassID(obj)) {
+    case mxDOUBLE_CLASS: return static_cast<const double*>(d)[i];
+    case mxSINGLE_CLASS: return static_cast<const float*>(d)[i];
+    case mxINT8_CLASS: return static_cast<const int8_T*>(d)[i];
+    case mxUINT8_CLASS: return static_cast<const uint8_T*>(d)[i];
+    case mxINT16_CLASS: return static_cast<const int16_T*>(d)[i];
+    case mxUINT16_CLASS: return static_cast<const uint16_T*>(d)[i];
+    case mxINT32_CLASS: return static_cast<const int32_T*>(d)[i];
+    case mxUINT32_CLASS: return static_cast<const uint32_T*>(d)[i];
+    case mxINT64_CLASS: return static_cast<double>(static_cast<const int64_T*>(d)[i]);
+    case mxUINT64_CLASS: return static_cast<double>(static_cast<const uint64_T*>(d)[i]);
+    case mxLOGICAL_CLASS: return static_cast<const mxLogical*>(d)[i] ? 1 : 0;
+    default: return 0;
+    }
+  }
+
+  template <class I, class S>
+  inline bool matlab_integer_cast(S x, I* v) {
+    I t = static_cast<I>(x);
+    if (static_cast<S>(t) != x || (x < 0) != (t < 0)) return false;
+    if (v) *v = t;
+    return true;
+  }
+
+  template <class I>
+  inline bool matlab_integer_element(mxArray* obj, size_t i, I* v) {
+    typedef std::numeric_limits<I> limits;
+    switch (mxGetClassID(obj)) {
+    case mxINT64_CLASS:
+      return matlab_integer_cast(static_cast<const int64_T*>(mxGetData(obj))[i], v);
+    case mxUINT64_CLASS:
+      return matlab_integer_cast(static_cast<const uint64_T*>(mxGetData(obj))[i], v);
+    default:
+      {
+	double x = matlab_double_element(obj, i);
+	if (x != std::floor(x) || x < static_cast<double>(limits::min())
+	    || x >= static_cast<double>(limits::max()) + 1.0) return false;
+	if (v) *v = static_cast<I>(x);
+	return true;
+      }
+    }
+  }
+
+  // Integers: integral elements of any numeric or logical class; returned as double
+  template <class T>
+  struct matlab_integer_array_traits : matlab_array_traits_none {
+    static bool check(mxArray* obj) { return matlab_is_numeric_vector(obj); }
+    static size_t size(mxArray* obj) { return mxGetNumberOfElements(obj); }
+    template <class Seq>
+    static bool append(mxArray* obj, size_t i, Seq* seq) {
+      T v;
+      if (!matlab_integer_element(obj, i, seq ? &v : (T*)0)) return false;
+      if (seq) seq->insert(seq->end(), v);
+      return true;
+    }
+    static mxArray* create(size_t n) { return mxCreateDoubleMatrix(1, n, mxREAL); }
+    static void set(mxArray* obj, size_t i, const T& v) {
+      static_cast<double*>(mxGetData(obj))[i] = static_cast<double>(v);
+    }
+  };
+
+  // Floating point: any numeric or logical class; returned as double
+  template <class T>
+  struct matlab_floating_array_traits : matlab_array_traits_none {
+    static bool check(mxArray* obj) { return matlab_is_numeric_vector(obj); }
+    static size_t size(mxArray* obj) { return mxGetNumberOfElements(obj); }
+    template <class Seq>
+    static bool append(mxArray* obj, size_t i, Seq* seq) {
+      if (seq) seq->insert(seq->end(), static_cast<T>(matlab_double_element(obj, i)));
+      return true;
+    }
+    static mxArray* create(size_t n) { return mxCreateDoubleMatrix(1, n, mxREAL); }
+    static void set(mxArray* obj, size_t i, const T& v) {
+      static_cast<double*>(mxGetData(obj))[i] = static_cast<double>(v);
+    }
+  };
+
+  template <> struct matlab_array_traits<short> : matlab_integer_array_traits<short> {};
+  template <> struct matlab_array_traits<unsigned short> : matlab_integer_array_traits<unsigned short> {};
+  template <> struct matlab_array_traits<int> : matlab_integer_array_traits<int> {};
+  template <> struct matlab_array_traits<unsigned int> : matlab_integer_array_traits<unsigned int> {};
+  template <> struct matlab_array_traits<long> : matlab_integer_array_traits<long> {};
+  template <> struct matlab_array_traits<unsigned long> : matlab_integer_array_traits<unsigned long> {};
+  template <> struct matlab_array_traits<long long> : matlab_integer_array_traits<long long> {};
+  template <> struct matlab_array_traits<unsigned long long> : matlab_integer_array_traits<unsigned long long> {};
+  template <> struct matlab_array_traits<float> : matlab_floating_array_traits<float> {};
+  template <> struct matlab_array_traits<double> : matlab_floating_array_traits<double> {};
+
+  // bool: logical vectors only (like the bool scalar); returned as logical
+  template <>
+  struct matlab_array_traits<bool> : matlab_array_traits_none {
+    static bool check(mxArray* obj) { return matlab_is_numeric_vector(obj) && mxIsLogical(obj); }
+    static size_t size(mxArray* obj) { return mxGetNumberOfElements(obj); }
+    template <class Seq>
+    static bool append(mxArray* obj, size_t i, Seq* seq) {
+      if (seq) seq->insert(seq->end(), mxGetLogicals(obj)[i] != 0);
+      return true;
+    }
+    static mxArray* create(size_t n) { return mxCreateLogicalMatrix(1, n); }
+    static void set(mxArray* obj, size_t i, const bool& v) { mxGetLogicals(obj)[i] = v; }
+  };
+
+  // std::string: string arrays (via cellstr) and char matrices, one string per
+  // row with trailing blanks removed; returned as a cell (cellstr)
+  template <>
+  struct matlab_array_traits<std::string> : matlab_array_traits_none {
+    static mxArray* prepare(mxArray* obj) {
+      mxArray* c = 0;
+      if (!mxIsClass(obj, "string")) return 0;
+      if (SWIG_Matlab_CallInterp(1, &c, 1, &obj, "cellstr")) return 0;
+      return c;
+    }
+    static bool check(mxArray* obj) { return mxIsChar(obj) && mxGetNumberOfDimensions(obj)==2; }
+    static size_t size(mxArray* obj) { return mxGetM(obj); }
+    template <class Seq>
+    static bool append(mxArray* obj, size_t i, Seq* seq) {
+      if (seq) {
+	size_t nrow = mxGetM(obj), len = mxGetN(obj);
+	const mxChar* d = mxGetChars(obj);
+	while (len > 0 && (d[i + nrow*(len - 1)]==' ' || d[i + nrow*(len - 1)]==0)) --len;
+	std::string s(len, ' ');
+	for (size_t k = 0; k < len; ++k) s[k] = static_cast<char>(d[i + nrow*k]);
+	seq->insert(seq->end(), s);
+      }
+      return true;
+    }
+  };
+}
+}
+
 %fragment("StdSequenceTraits","header",
 	  fragment="StdTraits",
-	  fragment="MatlabSequence_Cont")
+	  fragment="MatlabSequence_Cont",
+	  fragment="MatlabArrayTraits")
 {
 namespace swig {
   template <class Matlabseq, class Seq>
@@ -560,66 +706,101 @@ namespace swig {
 %#endif
   }
 
+  // Row, column or empty cell, a native array (matlab_array_traits) or a
+  // wrapped sequence.  Every element is checked, also when seq==0.
   template <class Seq, class T = typename Seq::value_type >
   struct traits_asptr_stdseq {
     typedef Seq sequence;
     typedef T value_type;
-    typedef typename sequence::iterator iterator;
+    typedef matlab_array_traits<T> array_traits;
+
+    static bool is_vector_cell(mxArray* obj) {
+      return mxIsCell(obj) && matlab_is_vector_shape(obj);
+    }
+
+    static int asptr_native(mxArray* obj, sequence **seq) {
+      size_t n;
+      bool cell = is_vector_cell(obj);
+      if (cell) {
+	n = mxGetNumberOfElements(obj);
+      } else if (array_traits::check(obj)) {
+	n = array_traits::size(obj);
+      } else {
+	return SWIG_ERROR;
+      }
+      if (!seq) {
+	for (size_t i = 0; i < n; ++i) {
+	  if (cell ? !swig::check<value_type>(mxGetCell(obj, i))
+	      : !array_traits::append(obj, i, (sequence*)0)) return SWIG_ERROR;
+	}
+	return SWIG_OK;
+      }
+      sequence *p = new sequence();
+      try {
+	for (size_t i = 0; i < n; ++i) {
+	  if (cell) {
+	    p->insert(p->end(), swig::as<value_type>(mxGetCell(obj, i)));
+	  } else if (!array_traits::append(obj, i, p)) {
+	    throw std::invalid_argument("bad type");
+	  }
+	}
+      } catch (std::exception&) {
+	delete p;
+	return SWIG_ERROR;
+      }
+      *seq = p;
+      return SWIG_NEWOBJ;
+    }
 
     static int asptr(mxArray* obj, sequence **seq) {
-      if (obj && mxGetClassID(obj)==mxCELL_CLASS &&
-              mxGetNumberOfDimensions(obj)==2 &&
-              mxGetM(obj)==1 && mxGetN(obj)>0 ) {
-        // Convert to cell array.
-        if (seq) {
-          *seq = new sequence();
-          int N = mxGetN(obj);
-          for (int i=0; i<N; ++i) {
-            (*seq)->push_back(swig::as<value_type>(mxGetCell(obj, i)));
-          }
-          return SWIG_NEWOBJ;
-        }
-      } else {
-	     sequence *p;
-       if (SWIG_ConvertPtr(obj,(void**)&p,
-                            swig::type_info<sequence>(),0) == SWIG_OK) {
-	      if (seq) *seq = p;
-	        return SWIG_OLDOBJ;
-	      }
+      if (!obj) return SWIG_ERROR;
+      mxArray* tmp = array_traits::prepare(obj);
+      int res = asptr_native(tmp ? tmp : obj, seq);
+      if (tmp) mxDestroyArray(tmp);
+      if (SWIG_IsOK(res)) return res;
+      sequence *p = 0;
+      swig_type_info *descriptor = swig::type_info<sequence>();
+      if (descriptor && SWIG_IsOK(SWIG_ConvertPtr(obj, (void **)&p, descriptor, 0))) {
+	if (seq) *seq = p;
+	return SWIG_OLDOBJ;
       }
       return SWIG_ERROR;
     }
   };
 
+  // Native array (matlab_array_traits) or 1xN cell; 0 if an element fails
   template <class Seq, class T = typename Seq::value_type >
   struct traits_from_stdseq {
     typedef Seq sequence;
     typedef T value_type;
-    typedef typename Seq::size_type size_type;
     typedef typename sequence::const_iterator const_iterator;
+    typedef matlab_array_traits<T> array_traits;
 
     static mxArray* from(const sequence& seq) {
-#ifdef SWIG_MATLAB_EXTRA_NATIVE_CONTAINERS
+%#ifdef SWIG_MATLAB_EXTRA_NATIVE_CONTAINERS
       swig_type_info *desc = swig::type_info<sequence>();
       if (desc && desc->clientdata) {
 	return SWIG_NewPointerObj(new sequence(seq), desc, SWIG_POINTER_OWN);
       }
-#endif
-
-      size_type size = seq.size();
-      if (size <= (size_type)INT_MAX) {
-        mxArray* c = mxCreateCellMatrix(1,size);
-	int i = 0;
-	for (const_iterator it = seq.begin();
-	     it != seq.end(); ++it, ++i) {
-	  mxSetCell(c, i, swig::from<value_type>(*it));
+%#endif
+      size_t i = 0;
+      mxArray* r = array_traits::create(seq.size());
+      if (r) {
+	for (const_iterator it = seq.begin(); it != seq.end(); ++it, ++i) {
+	  array_traits::set(r, i, *it);
 	}
-	return c;
-      } else {
-	SWIG_Error(SWIG_RuntimeError, "swig overflow error: sequence size not valid in matlab");
-	return 0;
+	return r;
       }
-      return 0;
+      r = mxCreateCellMatrix(1, seq.size());
+      for (const_iterator it = seq.begin(); it != seq.end(); ++it, ++i) {
+	mxArray* e = swig::from<value_type>(*it);
+	if (!e) {
+	  mxDestroyArray(r);
+	  return 0;
+	}
+	mxSetCell(r, i, e);
+      }
+      return r;
     }
   };
 }

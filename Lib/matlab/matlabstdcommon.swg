@@ -100,16 +100,15 @@ namespace swig {
     return traits_asval<Type>::asval(pm, val);
   }
 
+  // Conversion failures always throw: there is no valid object to return
   template <class Type> 
   struct traits_as<Type, value_category> {
-    static Type as(mxArray* pm, bool throw_error) {
+    static Type as(mxArray* pm, bool /*throw_error*/) {
       Type v;
-      int res = asval(pm, &v);
-      if (mxGetClassID(pm) == mxUNKNOWN_CLASS || !SWIG_IsOK(res)) {
-	if (!Matlab_Error_Occurred()) {
-	  %type_error(swig::type_name<Type>());
-	}
-	if (throw_error) throw std::invalid_argument("bad type");
+      int res = pm ? asval(pm, &v) : SWIG_ERROR;
+      if (!SWIG_IsOK(res)) {
+	%type_error(swig::type_name<Type>());
+	throw std::invalid_argument("bad type");
       }
       return v;
     }
@@ -117,9 +116,9 @@ namespace swig {
 
   template <class Type> 
   struct traits_as<Type, pointer_category> {
-    static Type as(mxArray* pm, bool throw_error) {
+    static Type as(mxArray* pm, bool /*throw_error*/) {
       Type *v = 0;      
-      int res = traits_asptr<Type>::asptr(pm, &v);
+      int res = pm ? traits_asptr<Type>::asptr(pm, &v) : SWIG_ERROR;
       if (SWIG_IsOK(res) && v) {
 	if (SWIG_IsNewObj(res)) {
 	  Type r(*v);
@@ -129,31 +128,22 @@ namespace swig {
 	  return *v;
 	}
       } else {
-	// Uninitialized return value, no Type() constructor required.
-	static Type *v_def = (Type*) malloc(sizeof(Type));
-	if (!Matlab_Error_Occurred()) {
-	  %type_error(swig::type_name<Type>());
-	}
-	if (throw_error) throw std::invalid_argument("bad type");
-        memset(static_cast<void *>(v_def),0,sizeof(Type));
-	return *v_def;
+	%type_error(swig::type_name<Type>());
+	throw std::invalid_argument("bad type");
       }
     }
   };
 
   template <class Type> 
   struct traits_as<Type*, pointer_category> {
-    static Type* as(mxArray* pm, bool throw_error) {
+    static Type* as(mxArray* pm, bool /*throw_error*/) {
       Type *v = 0;      
-      int res = traits_asptr<Type>::asptr(pm, &v);
+      int res = pm ? traits_asptr<Type>::asptr(pm, &v) : SWIG_ERROR;
       if (SWIG_IsOK(res)) {
 	return v;
       } else {
-	if (!Matlab_Error_Occurred()) {
-	  %type_error(swig::type_name<Type>());
-	}
-	if (throw_error) throw std::invalid_argument("bad type");
-	return 0;
+	%type_error(swig::type_name<Type>());
+	throw std::invalid_argument("bad type");
       }
     }
   };
@@ -166,7 +156,7 @@ namespace swig {
   template <class Type> 
   struct traits_check<Type, value_category> {
     static bool check(mxArray* obj) {
-      int res = asval(obj, (Type *)(0));
+      int res = obj ? asval(obj, (Type *)(0)) : SWIG_ERROR;
       return SWIG_IsOK(res) ? true : false;
     }
   };
@@ -174,7 +164,7 @@ namespace swig {
   template <class Type> 
   struct traits_check<Type, pointer_category> {
     static bool check(mxArray* obj) {
-      int res = asptr(obj, (Type **)(0));
+      int res = obj ? asptr(obj, (Type **)(0)) : SWIG_ERROR;
       return SWIG_IsOK(res) ? true : false;
     }
   };

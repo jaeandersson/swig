@@ -76,6 +76,7 @@
 
 %fragment("StdMapTraits","header",fragment="StdMapCommonTraits")
 {
+%#include <cctype>
   namespace swig {
     template <class MatlabSeq, class K, class T >
     inline void
@@ -87,58 +88,97 @@
       }
     }
 
-    template <class K, class T>
-    struct traits_asptr<std::map<K,T> >  {
-      typedef std::map<K,T> map_type;
+    inline bool matlab_is_field_name(const std::string& s) {
+      if (s.empty() || s.size() > 63 || !std::isalpha(static_cast<unsigned char>(s[0]))) return false;
+      for (std::string::const_iterator it = s.begin(); it != s.end(); ++it) {
+	if (!std::isalnum(static_cast<unsigned char>(*it)) && *it != '_') return false;
+      }
+      return true;
+    }
+
+    // Keys without a MATLAB representation: wrapped maps only
+    template <class K, class T, class Compare, class Alloc>
+    struct traits_asptr<std::map<K,T,Compare,Alloc > >  {
+      typedef std::map<K,T,Compare,Alloc > map_type;
       static int asptr(mxArray* obj, map_type **val) {
-	/*
-	int res = SWIG_ERROR;
-	if (PyDict_Check(obj)) {
-	  SwigVar_PyObject items = PyObject_CallMethod(obj,(char *)"items",NULL);
-	  res = traits_asptr_stdseq<std::map<K,T>, std::pair<K, T> >::asptr(items, val);
-	} else {
-	  map_type *p;
-	  res = SWIG_ConvertPtr(obj,(void**)&p,swig::type_info<map_type>(),0);
-	  if (SWIG_IsOK(res) && val)  *val = p;
-	}
+	map_type *p = 0;
+	swig_type_info *descriptor = swig::type_info<map_type>();
+	int res = obj && descriptor ? SWIG_ConvertPtr(obj, (void **)&p, descriptor, 0) : SWIG_ERROR;
+	if (SWIG_IsOK(res) && val) *val = p;
 	return res;
-	*/
-	return SWIG_ERROR;
-      }      
+      }
     };
-      
-    template <class K, class T >
-    struct traits_from<std::map<K,T> >  {
-      typedef std::map<K,T> map_type;
-      typedef typename map_type::const_iterator const_iterator;
-      typedef typename map_type::size_type size_type;
-            
+
+    template <class K, class T, class Compare, class Alloc>
+    struct traits_from<std::map<K,T,Compare,Alloc > >  {
+      typedef std::map<K,T,Compare,Alloc > map_type;
       static mxArray* from(const map_type& map) {
-	// TODO
-	/*
 	swig_type_info *desc = swig::type_info<map_type>();
 	if (desc && desc->clientdata) {
 	  return SWIG_NewPointerObj(new map_type(map), desc, SWIG_POINTER_OWN);
-	} else {
-	  size_type size = map.size();
-	  int pysize = (size <= (size_type) INT_MAX) ? (int) size : -1;
-	  if (pysize < 0) {
-	    SWIG_PYTHON_THREAD_BEGIN_BLOCK;
-	    PyErr_SetString(PyExc_OverflowError,
-			    "map size not valid in python");
-	    SWIG_PYTHON_THREAD_END_BLOCK;
-	    return NULL;
-	  }
-	  PyObject *obj = PyDict_New();
-	  for (const_iterator i= map.begin(); i!= map.end(); ++i) {
-	    swig::SwigVar_PyObject key = swig::from(i->first);
-	    swig::SwigVar_PyObject val = swig::from(i->second);
-	    PyDict_SetItem(obj, key, val);
-	  }
-	  return obj;
 	}
-	*/
-	return 0 /* mxArray*/;
+	SWIG_Error(SWIG_TypeError, "map key type has no MATLAB representation");
+	return 0;
+      }
+    };
+
+    // String keys: 1x1 struct, one field per key
+    template <class T, class Compare, class Alloc>
+    struct traits_asptr<std::map<std::string,T,Compare,Alloc > >  {
+      typedef std::map<std::string,T,Compare,Alloc > map_type;
+      static int asptr(mxArray* obj, map_type **val) {
+	if (obj && mxIsStruct(obj) && mxGetNumberOfElements(obj)==1) {
+	  int n = mxGetNumberOfFields(obj);
+	  if (!val) {
+	    for (int k = 0; k < n; ++k) {
+	      if (!swig::check<T>(mxGetFieldByNumber(obj, 0, k))) return SWIG_ERROR;
+	    }
+	    return SWIG_OK;
+	  }
+	  map_type *p = new map_type();
+	  try {
+	    for (int k = 0; k < n; ++k) {
+	      p->insert(typename map_type::value_type(mxGetFieldNameByNumber(obj, k),
+						      swig::as<T>(mxGetFieldByNumber(obj, 0, k))));
+	    }
+	  } catch (std::exception&) {
+	    delete p;
+	    return SWIG_ERROR;
+	  }
+	  *val = p;
+	  return SWIG_NEWOBJ;
+	}
+	map_type *p = 0;
+	swig_type_info *descriptor = swig::type_info<map_type>();
+	int res = obj && descriptor ? SWIG_ConvertPtr(obj, (void **)&p, descriptor, 0) : SWIG_ERROR;
+	if (SWIG_IsOK(res) && val) *val = p;
+	return res;
+      }
+    };
+
+    template <class T, class Compare, class Alloc>
+    struct traits_from<std::map<std::string,T,Compare,Alloc > >  {
+      typedef std::map<std::string,T,Compare,Alloc > map_type;
+      typedef typename map_type::const_iterator const_iterator;
+      static mxArray* from(const map_type& map) {
+%#ifdef SWIG_MATLAB_EXTRA_NATIVE_CONTAINERS
+	swig_type_info *desc = swig::type_info<map_type>();
+	if (desc && desc->clientdata) {
+	  return SWIG_NewPointerObj(new map_type(map), desc, SWIG_POINTER_OWN);
+	}
+%#endif
+	mxArray* r = mxCreateStructMatrix(1, 1, 0, 0);
+	for (const_iterator it = map.begin(); it != map.end(); ++it) {
+	  int k = matlab_is_field_name(it->first) ? mxAddField(r, it->first.c_str()) : -1;
+	  mxArray* e = k < 0 ? 0 : swig::from<T>(it->second);
+	  if (!e) {
+	    if (k < 0) SWIG_Error(SWIG_ValueError, "map key is not a valid MATLAB field name");
+	    mxDestroyArray(r);
+	    return 0;
+	  }
+	  mxSetFieldByNumber(r, 0, k, e);
+	}
+	return r;
       }
     };
   }
