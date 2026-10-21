@@ -87,6 +87,18 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* swig_last_error_msg(void) {
 #define SWIGINTERNINLINE static inline
 #endif
 
+/* A val viewing a handle owned by the caller (the handle stays valid afterwards) */
+SWIGRUNTIMEINLINE emscripten::val SWIG_WASMJS_Borrow(EM_VAL h) {
+  emscripten::internal::_emval_incref(h);
+  return emscripten::val::take_ownership(h);
+}
+
+/* A wrapped object: a non-null JS object or callable carrying its own `_ptr` */
+SWIGRUNTIMEINLINE bool SWIG_WASMJS_IsWrapped(const emscripten::val& v) {
+  std::string ty = v.typeOf().as<std::string>();
+  return (ty == "object" || ty == "function") && !v.isNull() && v.hasOwnProperty("_ptr");
+}
+
 /* Phase 3.2: cast-chain + types-array init lives in the wrappers block,
    wired up eagerly via a static-constructor object emitted by
    wasm_js.cxx.  No forward declaration needed here -- the wrappers
