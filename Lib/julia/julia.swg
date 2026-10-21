@@ -263,6 +263,17 @@ static jl_value_t* swig_jl_make_tuple2(jl_value_t* a, jl_value_t* b) {
    synthesised C uses jl_apply_array_type / SWIG_NewPointerObj / the
    swig_jl_make_tuple2 helper above (all reachable via SwigJlRuntime). */
 
+/* Precedence-only typecheck rules: they rank overloads (customdoc docstrings) without
+   generating _swig_can_ probe code; an interface adds real checks where it needs them. */
+%typemap(typecheck, precedence=SWIG_TYPECHECK_POINTER) SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE, SWIGTYPE *const& ""
+%typemap(typecheck, precedence=SWIG_TYPECHECK_BOOL) bool, const bool& ""
+%typemap(typecheck, precedence=SWIG_TYPECHECK_INTEGER)
+  char, signed char, unsigned char, short, unsigned short, int, unsigned int, long, unsigned long,
+  long long, unsigned long long, const short&, const int&, const long&, const long long&,
+  const unsigned int&, const unsigned long&, const unsigned long long& ""
+%typemap(typecheck, precedence=SWIG_TYPECHECK_DOUBLE) float, double, const float&, const double& ""
+%typemap(typecheck, precedence=SWIG_TYPECHECK_STRING) char *, const char * ""
+
 /* A raw Julia object crosses untouched (cf. PyObject* in the Python module) */
 %typemap(ctype)   jl_value_t * "jl_value_t*"
 %typemap(in)      jl_value_t * %{ $1 = $input; %}

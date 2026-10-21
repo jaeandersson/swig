@@ -1182,7 +1182,7 @@ public:
       for (; q; ) {
         if (checkAttribute(q, "tmap:in:numinputs", "0")) { q = Getattr(q, "tmap:in:next"); continue; }
         String *tc = Getattr(q, "tmap:typecheck");
-        if (tc) {
+        if (tc && Len(tc) > 0) {   /* an empty rule only carries a precedence */
           String *b = Copy(tc);
           String *iv = NewStringf("jarg%d", qi);
           Replaceall(b, "$input", iv);
