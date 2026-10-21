@@ -263,6 +263,14 @@ static jl_value_t* swig_jl_make_tuple2(jl_value_t* a, jl_value_t* b) {
    synthesised C uses jl_apply_array_type / SWIG_NewPointerObj / the
    swig_jl_make_tuple2 helper above (all reachable via SwigJlRuntime). */
 
+/* A raw Julia object crosses untouched (cf. PyObject* in the Python module) */
+%typemap(ctype)   jl_value_t * "jl_value_t*"
+%typemap(in)      jl_value_t * %{ $1 = $input; %}
+%typemap(out)     jl_value_t * %{ $result = $1; %}
+%typemap(jltype)  jl_value_t * "Any"
+%typemap(jlparam) jl_value_t * "Any"
+%typemap(jlout)   jl_value_t * "_check($call)"
+
 /* ---- runtime support for interface libraries (casadi.i-style) ----
  * Pointer carriers: a Julia proxy (mutable struct with a `ptr::Ptr{Cvoid}`
  * field) crosses as jl_value_t*; SWIG_ConvertPtr reads the field.  Type
