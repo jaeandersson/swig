@@ -87,6 +87,27 @@ public:
      commas only -- a type annotation may itself contain commas (e.g.
      Union{Integer,Enum}, AbstractVector{<:Real}).  When `defs` is non-null it
      receives each slot's default literal ("" when none). */
+  /* Replace whole-identifier occurrences of `from` in s by `to`; a match right
+     after '.' is a field access (x.ptr), not a variable, and is left alone. */
+  static void rename_ident(String *s, String *from, String *to) {
+    String *out = NewString("");
+    const char *p = Char(s), *f = Char(from);
+    size_t fl = strlen(f);
+    for (size_t i = 0; p[i];) {
+      bool idprev = i > 0 && (isalnum((unsigned char)p[i - 1]) || p[i - 1] == '_' || p[i - 1] == '.');
+      if (!idprev && strncmp(p + i, f, fl) == 0 && !(isalnum((unsigned char)p[i + fl]) || p[i + fl] == '_')) {
+        Append(out, to);
+        i += fl;
+      } else {
+        Putc(p[i], out);
+        ++i;
+      }
+    }
+    Clear(s);
+    Append(s, out);
+    Delete(out);
+  }
+
   void split_signature(String *sig, List *names, List *types, List *hasdef, List *defs = 0) {
     const char *s = Char(sig);
     int depth = 0, start = 0, i = 0;
@@ -378,33 +399,24 @@ public:
           String *pv = Copy(Getattr(e, "preserve"));
           String *jargs = Copy(Getattr(e, "jccall_args"));
           {  /* rename this entry's args to entry-0 names (body, preserve, and
-                the can-probe arg-list must all use the merged positional names) */
-            List *parts = Split(Getattr(e, "sig"), ',', -1);
-            for (int pi = 0; pi < Len(parts) && pi < Len(names0); ++pi) {
-              String *part = (String *)Getitem(parts, pi);
-              const char *cc = Strstr(part, "::");
-              String *nm = cc ? NewStringWithSize(Char(part), (int)(cc - Char(part))) : Copy(part);
-              Replaceall(nm, " ", "");
-              if (Strcmp(nm, (String *)Getitem(names0, pi)) != 0) {
-                String *pat1 = NewStringf("%s, ", nm);
-                String *rep1 = NewStringf("%s, ", (String *)Getitem(names0, pi));
-                Replaceall(body, pat1, rep1);
-                Replaceall(pv, pat1, rep1);
-                Replaceall(jargs, pat1, rep1);
-                String *pat2 = NewStringf("%s ", nm);
-                String *rep2 = NewStringf("%s ", (String *)Getitem(names0, pi));
-                Replaceall(pv, pat2, rep2);
-                /* opaque-ptr args appear as `nm.ptr` in body and jccall_args */
-                String *pat3 = NewStringf("%s.ptr", nm);
-                String *rep3 = NewStringf("%s.ptr", (String *)Getitem(names0, pi));
-                Replaceall(body, pat3, rep3);
-                Replaceall(jargs, pat3, rep3);
-                Delete(pat1); Delete(rep1); Delete(pat2); Delete(rep2);
-                Delete(pat3); Delete(rep3);
+                the can-probe arg-list must all use the merged positional names);
+                via placeholders, so swapped names (x,y)->(y,x) cannot chain */
+            List *ne = NewList(), *te = NewList(), *de = NewList();
+            split_signature(Getattr(e, "sig"), ne, te, de);
+            String *parts[] = {body, pv, jargs};
+            for (int pass = 0; pass < 2; ++pass) {
+              for (int pi = 0; pi < Len(ne) && pi < Len(names0); ++pi) {
+                String *nm = (String *)Getitem(ne, pi);
+                if (Strcmp(nm, (String *)Getitem(names0, pi)) == 0) continue;
+                String *tmp = NewStringf("_swigjl_arg%d_", pi);
+                for (int k = 0; k < 3; ++k) {
+                  if (pass == 0) rename_ident(parts[k], nm, tmp);
+                  else rename_ident(parts[k], tmp, (String *)Getitem(names0, pi));
+                }
+                Delete(tmp);
               }
-              Delete(nm);
             }
-            Delete(parts);
+            Delete(ne); Delete(te); Delete(de);
           }
           bool last = (ei == Len(lst) - 1);
           if (!last && Getattr(e, "has_probe")) {
