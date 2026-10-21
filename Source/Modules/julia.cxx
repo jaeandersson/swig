@@ -44,6 +44,8 @@ class JULIA : public Language {
   String *bare_symname;   /* unqualified member name captured pre-transform */
   Hash   *enum_seen;      /* @enum type names already emitted (dedup) */
   Hash   *director_classes; /* C++ classname -> "1" for director-enabled classes */
+  Hash   *jl_docs;        /* Julia fname -> List of documentation sections (customdoc) */
+  List   *jl_doc_order;
   bool    in_ctor, in_static;
   bool    class_has_copyctor;  /* a copy ctor was wrapped for the current class */
   int     n_skipped;
@@ -52,7 +54,7 @@ public:
   JULIA() : f_begin(0), f_runtime(0), f_header(0), f_wrappers(0), f_init(0),
             f_jl_types(0), f_jl_body(0), f_jl_exports(0), f_directors(0), f_directors_h(0), module_name(0),
             f_type_init(0), f_proxy_pairs(0), jl_methods(0), jl_method_order(0), class_statics(0), class_members(0), class_methods(0), class_bases(0), class_jlname(0),
-            bare_symname(0), enum_seen(0), director_classes(0), in_ctor(false), in_static(false), class_has_copyctor(false), n_skipped(0) {}
+            bare_symname(0), enum_seen(0), director_classes(0), jl_docs(0), jl_doc_order(0), in_ctor(false), in_static(false), class_has_copyctor(false), n_skipped(0) {}
 
   virtual void main(int argc, char *argv[]) {
     (void)argc; (void)argv;
@@ -772,6 +774,7 @@ public:
     }
     emit_method_style_getproperty(jf);
     emit_static_method_style_getproperty(jf);
+    emit_docs(jf);
     if (Len(f_jl_exports) > 0) Printf(jf, "export %s\n", f_jl_exports);
     Printf(jf, "\nend # module %s\n", module_name);
     Delete(jf);
@@ -781,6 +784,60 @@ public:
 
     Delete(f_begin);
     return SWIG_OK;
+  }
+
+  /* %feature("customdoc"): record the documentation of an overload set once,
+     under the Julia name it is reachable by; classes sharing a text share a section. */
+  void record_doc(Node *n, String *fname) {
+    if (!checkAttribute(n, "feature:customdoc", "1")) return;
+    /* at the last overload, so every overload's wrap:parms is set */
+    if (Getattr(n, "sym:nextSibling")) return;
+    if (Getattr(n, "sym:overloaded")) n = Getattr(n, "sym:overloaded");
+    String *doc = Swig_document_function(n);
+    if (!doc || Len(doc) == 0) return;
+    while (Strstr(doc, "\n\n\n")) Replaceall(doc, "\n\n\n", "\n\n");
+    Chop(doc);
+    while (Len(doc) > 0 && (*Char(doc) == '\n' || *Char(doc) == ' ')) Delitem(doc, 0);
+    if (Len(doc) == 0) return;
+    if (!jl_docs) { jl_docs = NewHash(); jl_doc_order = NewList(); }
+    Hash *secs = (Hash *)Getattr(jl_docs, fname);   /* text -> List of class names */
+    if (!secs) {
+      secs = NewHash(); Setattr(jl_docs, fname, secs); Append(jl_doc_order, Copy(fname));
+      Setattr(secs, "#order", NewList());
+    }
+    List *owners = (List *)Getattr(secs, doc);
+    if (!owners) { owners = NewList(); Setattr(secs, doc, owners); Append((List *)Getattr(secs, "#order"), Copy(doc)); }
+    if (class_jlname && Strcmp(class_jlname, fname) != 0) Append(owners, NewStringf("`%s.%s`", class_jlname, fname));
+  }
+
+  /* One @doc per Julia function: Julia shows a function's documentation across
+     all its methods, so the sections of every class defining the name are joined. */
+  void emit_docs(File *jf) {
+    if (!jl_doc_order) return;
+    Printf(jf, "\n# documentation (%%feature(\"customdoc\"))\n");
+    for (int i = 0; i < Len(jl_doc_order); ++i) {
+      String *fname = (String *)Getitem(jl_doc_order, i);
+      const char *c = Char(fname);
+      bool ident = isalpha((unsigned char)c[0]) || c[0] == '_';
+      for (const char *q = c; *q && ident; ++q) ident = isalnum((unsigned char)*q) || *q == '_' || *q == '!';
+      if (!ident) continue;
+      Hash *secs = (Hash *)Getattr(jl_docs, fname);
+      List *order = (List *)Getattr(secs, "#order");
+      String *txt = NewString("");
+      for (int k = 0; k < Len(order); ++k) {
+        String *doc = (String *)Getitem(order, k);
+        List *owners = (List *)Getattr(secs, doc);
+        if (k) Printf(txt, "\n\n---\n\n");
+        for (int o = 0; o < Len(owners); ++o) Printf(txt, "%s%s", o ? ", " : "**", (String *)Getitem(owners, o));
+        if (Len(owners)) Printf(txt, "**\n\n");
+        Append(txt, doc);
+      }
+      Replaceall(txt, "\\", "\\\\");
+      Replaceall(txt, "$", "\\$");
+      Replaceall(txt, "\"", "\\\"");
+      Printf(jf, "@doc \"\"\"\n%s\n\"\"\" %s\n", txt, fname);
+      Delete(txt);
+    }
   }
 
   void add_export(const String *name) {
@@ -991,6 +1048,7 @@ public:
     /* attach typemaps; sets lname (arg1, ...) for $1 substitution */
     emit_parameter_variables(parms, w);
     emit_attach_parmmaps(parms, w);
+    Setattr(n, "wrap:parms", parms);   /* read by the customdoc prototypes */
     Swig_typemap_attach_parms("ctype", parms, w);
     Swig_typemap_attach_parms("jltype", parms, w);
     Swig_typemap_attach_parms("jlparam", parms, w);
@@ -1311,6 +1369,7 @@ public:
       Append(lst, e);
       Delete(key);
     }
+    record_doc(n, fname);
     Delete(sigtypes);
     if (class_jlname && !in_static && !in_ctor) {
       /* member method: register a structured entry for derived-class
