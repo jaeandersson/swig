@@ -429,12 +429,16 @@ public:
   }
 
   /* Collect class `cls`'s own instance-method names plus those inherited from
-     all transitive bases into `out` (a Set-like Hash of fname -> "1"). */
+     all transitive bases into `out` (fname -> "1", or "property" for a member
+     marked %feature("julia:property")).  The most derived class decides. */
   void collect_flattened_methods(String *cls, Hash *out, Hash *seen) {
     if (Getattr(seen, cls)) return;
     Setattr(seen, cls, "1");
     Hash *own = class_methods ? (Hash *)Getattr(class_methods, cls) : 0;
-    if (own) { Iterator mi = First(own); while (mi.key) { Setattr(out, mi.key, "1"); mi = Next(mi); } }
+    if (own) {
+      Iterator mi = First(own);
+      while (mi.key) { if (!Getattr(out, mi.key)) Setattr(out, mi.key, mi.item); mi = Next(mi); }
+    }
     List *bb = class_bases ? (List *)Getattr(class_bases, cls) : 0;
     if (bb) for (int i = 0; i < Len(bb); ++i) collect_flattened_methods((String *)Getitem(bb, i), out, seen);
   }
@@ -471,21 +475,34 @@ public:
       Delete(seen);
       if (Len(flat) > 0) {
         String *set = NewString("");
+        String *props = NewString("");
         Iterator mi = First(flat);
         bool first = true;
-        while (mi.key) { Printf(set, "%s:%s", first ? "" : ", ", mi.key); first = false; mi = Next(mi); }
+        while (mi.key) {
+          Printf(set, "%s:%s", first ? "" : ", ", mi.key); first = false;
+          if (Strcmp(mi.item, "property") == 0) Printf(props, "%s:%s", Len(props) ? ", " : "", mi.key);
+          mi = Next(mi);
+        }
         Printf(jf, "const _swigjl_methods_%s = Set{Symbol}([%s])\n", cls, set);
+        /* zero-argument members marked %feature("julia:property"): obj.name is
+           the value itself (like a Python @property), not a bound method */
+        String *propcheck = NewString("");
+        if (Len(props) > 0) {
+          Printf(jf, "const _swigjl_properties_%s = Set{Symbol}([%s])\n", cls, props);
+          Printf(propcheck, "    s in _swigjl_properties_%s && return getfield(@__MODULE__, s)(x)\n", cls);
+        }
         Printf(jf,
           "@inline function Base.getproperty(x::%s, s::Symbol)\n"
           "    s in fieldnames(%s) && return getfield(x, s)\n"
+          "%s"
           "    if s in _swigjl_methods_%s\n"
           "        f = getfield(@__MODULE__, s)\n"
           "        return (args...; kw...) -> f(x, args...; kw...)\n"
           "    end\n"
           "    return getfield(x, s)\n"
           "end\n",
-          cls, cls, cls);
-        Delete(set);
+          cls, cls, propcheck, cls);
+        Delete(set); Delete(props); Delete(propcheck);
       }
       Delete(flat);
       ci = Next(ci);
@@ -1308,7 +1325,7 @@ public:
         if (!class_methods) class_methods = NewHash();
         Hash *ms = (Hash *)Getattr(class_methods, class_jlname);
         if (!ms) { ms = NewHash(); Setattr(class_methods, class_jlname, ms); }
-        Setattr(ms, fname, "1");
+        Setattr(ms, fname, GetFlag(n, "feature:julia:property") ? "property" : "1");
       }
       Delete(selfpat);
     }
