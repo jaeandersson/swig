@@ -24,18 +24,28 @@
 #include <type_traits>
 %}
 
-/* Accept Julia Float64 / Int64 / Bool; reject non-integral sources for
-   integral targets so overload / GenericType dispatch can fall through
-   to a floating-point candidate. */
+/* Accept any Julia Real (pi, Float32, Rational, BigFloat, ... via Float64);
+   reject non-integral sources for integral targets so overload / GenericType
+   dispatch can fall through to a floating-point candidate. */
+%fragment("SWIG_jl_real_to_double", "header") {
+SWIGINTERN bool SWIG_jl_real_to_double(jl_value_t* p, double* d) {
+  if (jl_typeis(p, jl_float64_type)) { *d = jl_unbox_float64(p); return true; }
+  if (jl_typeis(p, jl_int64_type)) { *d = (double)jl_unbox_int64(p); return true; }
+  if (jl_typeis(p, jl_bool_type)) { *d = jl_unbox_bool(p) ? 1.0 : 0.0; return true; }
+  jl_value_t* real = jl_get_global(jl_base_module, jl_symbol("Real"));
+  if (!real || !jl_isa(p, real)) return false;
+  jl_value_t* r = jl_call2(jl_get_function(jl_base_module, "convert"), (jl_value_t*)jl_float64_type, p);
+  if (!r || !jl_typeis(r, jl_float64_type)) { jl_exception_clear(); return false; }
+  *d = jl_unbox_float64(r);
+  return true;
+}
+}
 %define %julia_primtype_asval(T)
-%fragment(SWIG_AsVal_frag(T), "header") {
+%fragment(SWIG_AsVal_frag(T), "header", fragment="SWIG_jl_real_to_double") {
 SWIGINTERN int SWIG_AsVal_dec(T)(jl_value_t* p, T* val) {
   if (!p) return SWIG_ERROR;
   double d;
-  if (jl_typeis(p, jl_float64_type)) d = jl_unbox_float64(p);
-  else if (jl_typeis(p, jl_int64_type)) d = (double)jl_unbox_int64(p);
-  else if (jl_typeis(p, jl_bool_type)) d = jl_unbox_bool(p) ? 1.0 : 0.0;
-  else return SWIG_ERROR;
+  if (!SWIG_jl_real_to_double(p, &d)) return SWIG_ERROR;
   if (std::is_integral< T >::value &&
       d != static_cast<double>(static_cast<long long>(d))) return SWIG_ERROR;
   if (val) *val = static_cast< T >(d);
