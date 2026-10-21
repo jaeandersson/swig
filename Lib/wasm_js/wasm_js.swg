@@ -172,7 +172,7 @@ _argouts[_argout_idx++] = (void*)(X);
 %typemap(jsout) bool "(!!($call))"
 
 // ============================================================================
-// long long / unsigned long long (and typedefs like casadi_int) — wrap
+// long long / unsigned long long (and their typedefs) — wrap
 // the JS arg with BigInt() at the wasm-call boundary so users can pass
 // plain `Number` literals for matrix dimensions, indices, etc.  Without
 // this, embind throws "Cannot convert ... to BigInt" when a Number is
@@ -275,24 +275,6 @@ namespace swig {
     }
   }
 %}
-// SWIG normally typedef-resolves before matching, so the long-long
-// patterns above should already pick up casadi_int (= long long).
-// Register explicitly anyway: makes intent obvious and immunises us
-// against config builds that redefine CASADI_INT_TYPE.
-%typemap(directorin) casadi_int %{
-  $input = emscripten::val(static_cast<double>($1)).release_ownership();
-%}
-%typemap(directorout) casadi_int %{
-  {
-    emscripten::val __v = emscripten::val::take_ownership($input);
-    if (__v.typeOf().as<std::string>() == "bigint") {
-      $result = static_cast<casadi_int>(__v.as<long long>());
-    } else {
-      $result = static_cast<casadi_int>(__v.as<double>());
-    }
-  }
-%}
-
 %typemap(directorin) std::string, const std::string& %{
   $input = emscripten::val(std::string($1)).release_ownership();
 %}

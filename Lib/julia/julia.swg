@@ -28,13 +28,13 @@
 %typemap(jlparam) double, const double&, float, const float& "Real"
 %typemap(jlout)  double, const double&, float, const float& "_check($call)"
 
-%typemap(ctype)  int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, casadi_int, const casadi_int& "long long"
-%typemap(in)     int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, casadi_int %{ $1 = ($1_ltype)$input; %}
-%typemap(in)     const casadi_int& (long long tmp) %{ tmp = $input; $1 = ($1_ltype)&tmp; %}
-%typemap(out)    int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, casadi_int, const casadi_int& %{ $result = (long long)$1; %}
-%typemap(jltype) int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, casadi_int, const casadi_int& "Clonglong"
-%typemap(jlparam) int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, casadi_int, const casadi_int& "Integer"
-%typemap(jlout)  int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, casadi_int, const casadi_int& "Int(_check($call))"
+%typemap(ctype)  int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, const long long& "long long"
+%typemap(in)     int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short %{ $1 = ($1_ltype)$input; %}
+%typemap(in)     const long long& (long long tmp) %{ tmp = $input; $1 = ($1_ltype)&tmp; %}
+%typemap(out)    int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, const long long& %{ $result = (long long)$1; %}
+%typemap(jltype) int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, const long long& "Clonglong"
+%typemap(jlparam) int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, const long long& "Integer"
+%typemap(jlout)  int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, const long long& "Int(_check($call))"
 
 %typemap(ctype)  bool, const bool& "unsigned char"
 %typemap(in)     bool %{ $1 = $input != 0; %}
@@ -74,14 +74,14 @@
  * assigns $result.  Class/container bridges are supplied per-type by the
  * interface .i (the matcher does not generalise instantiated templates). */
 %typemap(directorin)  bool        %{ $input = jl_box_bool($1 ? 1 : 0); %}
-%typemap(directorin)  int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, casadi_int
+%typemap(directorin)  int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short
                                    %{ $input = jl_box_int64((int64_t)$1); %}
 %typemap(directorin)  double, float %{ $input = jl_box_float64((double)$1); %}
 %typemap(directorin)  std::string, const std::string& %{ $input = jl_cstr_to_string(std::string($1).c_str()); %}
 %typemap(directorin)  char *, const char * %{ $input = jl_cstr_to_string($1 ? $1 : ""); %}
 
 %typemap(directorout) bool        %{ $result = jl_unbox_bool($input) != 0; %}
-%typemap(directorout) int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, casadi_int
+%typemap(directorout) int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short
                                    %{ $result = ($1_ltype)jl_unbox_int64($input); %}
 %typemap(directorout) double, float %{ $result = ($1_ltype)jl_unbox_float64($input); %}
 %typemap(directorout) std::string %{ $result = std::string(jl_string_ptr($input), jl_string_len($input)); %}
@@ -241,12 +241,12 @@ static jl_value_t* swig_jl_make_tuple2(jl_value_t* a, jl_value_t* b) {
 %typemap(jlparam) std::vector<double>, const std::vector<double>& "AbstractVector{<:Real}"
 %typemap(jlout)  std::vector<double>, const std::vector<double>& "_check($call)::Vector{Float64}"
 
-%typemap(ctype, fragment="SwigJlRuntime")  std::vector<long long>, const std::vector<long long>&, std::vector<casadi_int>, const std::vector<casadi_int>& "jl_value_t*"
+%typemap(ctype, fragment="SwigJlRuntime")  std::vector<long long>, const std::vector<long long>& "jl_value_t*"
 %typemap(in)     std::vector<long long> %{ $1 = swig_jl_to_vec_int($input); %}
 %typemap(in)     const std::vector<long long>& (std::vector<long long> tmp) %{ tmp = swig_jl_to_vec_int($input); $1 = &tmp; %}
 %typemap(out)    std::vector<long long>, const std::vector<long long>& %{ $result = swig_jl_from_vec_int($1); %}
-%typemap(jltype) std::vector<long long>, const std::vector<long long>&, std::vector<casadi_int>, const std::vector<casadi_int>& "Any"
-%typemap(jlparam) std::vector<long long>, const std::vector<long long>&, std::vector<casadi_int>, const std::vector<casadi_int>& "AbstractVector{<:Integer}"
+%typemap(jltype) std::vector<long long>, const std::vector<long long>& "Any"
+%typemap(jlparam) std::vector<long long>, const std::vector<long long>& "AbstractVector{<:Integer}"
 %typemap(jlout)  std::vector<long long>, const std::vector<long long>& "_check($call)::Vector{Int64}"
 
 %typemap(ctype, fragment="SwigJlRuntime")  std::vector<std::string>, const std::vector<std::string>& "jl_value_t*"

@@ -41,7 +41,7 @@ SWIGINTERN bool SWIG_jl_real_to_double(jl_value_t* p, double* d) {
 }
 }
 /* double -> T, shared by SWIG_AsVal and the native-array fast paths of the containers:
-   integral targets need an integral value in range (bool: any integral value) */
+   integral targets need an integral value in range */
 %fragment("SWIG_jl_double_to", "header") {
 %#include <limits>
 template <class T> SWIGINTERNINLINE int SWIG_jl_double_to(double d, T* val) {
@@ -73,7 +73,14 @@ SWIGINTERNINLINE jl_value_t* SWIG_From_dec(T)(T value) {
 }
 %enddef
 
-%julia_primtype_asval(bool)
+/* bool: a Julia Bool only, so that integers stay integers in overloads and variants */
+%fragment(SWIG_AsVal_frag(bool), "header") {
+SWIGINTERN int SWIG_AsVal_dec(bool)(jl_value_t* p, bool* val) {
+  if (!p || !jl_typeis(p, jl_bool_type)) return SWIG_ERROR;
+  if (val) *val = jl_unbox_bool(p) != 0;
+  return SWIG_OK;
+}
+}
 %julia_primtype_asval(signed char)
 %julia_primtype_asval(unsigned char)
 %julia_primtype_asval(short)
@@ -87,7 +94,6 @@ SWIGINTERNINLINE jl_value_t* SWIG_From_dec(T)(T value) {
 %julia_primtype_asval(size_t)
 %julia_primtype_asval(double)
 %julia_primtype_asval(float)
-%julia_primtype_asval(casadi_int)
 
 %julia_primtype_from_body(bool, jl_box_bool(value ? 1 : 0))
 %julia_primtype_from_body(signed char, jl_box_int64((int64_t)value))

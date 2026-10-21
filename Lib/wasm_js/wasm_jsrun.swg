@@ -23,12 +23,12 @@
 
 /* val.h declares EM_VAL (and the underlying `struct _EM_VAL`) inside
    namespace emscripten.  Bring both into global scope so the rest of
-   the generated wrapper -- including casadi.i's
-   `#define GUESTOBJECT casadi_emval_struct` substitution -- sees them
-   as unqualified identifiers, mirroring the way matlab.cxx wrappers
-   refer to plain `mxArray` / `mxArray*`. */
+   the generated wrapper -- and interface code that names the object
+   type, as in `SWIG_WASMJS_Object *p` -- sees them as unqualified
+   identifiers, mirroring the way matlab.cxx wrappers refer to plain
+   `mxArray` / `mxArray*`. */
 using emscripten::EM_VAL;
-typedef ::emscripten::_EM_VAL casadi_emval_struct;
+typedef ::emscripten::_EM_VAL SWIG_WASMJS_Object;
 
 /* Thread-local-ish error slot.  wasm-js is single-threaded today, so
    plain statics suffice.  Every generated wrapper emits a `fail:` label

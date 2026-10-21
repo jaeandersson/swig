@@ -69,6 +69,15 @@ namespace std {
   template <typename T1, typename T2> struct pair {
     %fragment(SWIG_Traits_frag(std::pair< T1, T2 >), "header",
               fragment=SWIG_Traits_frag(T1), fragment=SWIG_Traits_frag(T2), fragment="StdPairTraits") {}
+    // Returned via swig::from as an owned handle to a 2-element JS Array
+    %typemap(ctype) pair< T1, T2 >, const pair< T1, T2 >& "EM_VAL"
+    %typemap(out, noblock=1, fragment=SWIG_Traits_frag(std::pair< T1, T2 >)) pair< T1, T2 > {
+      if (!($result = swig::from(static_cast< const std::pair< T1, T2 >& >($1)))) SWIG_exception_fail(SWIG_TypeError, "Failed to convert output");
+    }
+    %typemap(out, noblock=1, fragment=SWIG_Traits_frag(std::pair< T1, T2 >)) const pair< T1, T2 >& {
+      if (!($result = swig::from(*$1))) SWIG_exception_fail(SWIG_TypeError, "Failed to convert output");
+    }
+    %typemap(jsout) pair< T1, T2 >, const pair< T1, T2 >& "M.__swig_release_handle($call)"
     T1 first;
     T2 second;
   };

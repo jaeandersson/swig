@@ -29,7 +29,7 @@ namespace swig {
   template <class T>
   struct julia_array_traits : julia_array_traits_none {};
 
-  // Arithmetic: Float64, Int64 and Bool arrays read in place; returned as Float64, Int64 or Bool
+  // Arithmetic: Float64, Int64 and Bool arrays (bool: Bool only) read in place; returned as Float64, Int64 or Bool
   template <class T>
   struct julia_arith_array_traits : julia_array_traits_none {
     static jl_value_t* eltype() {
@@ -50,6 +50,7 @@ namespace swig {
     template <class Seq>
     static int read(jl_value_t* a, size_t n, Seq* seq) {
       jl_value_t* et = (jl_value_t*)jl_array_eltype(a);
+      if (std::is_same<T, bool>::value && et != (jl_value_t*)jl_bool_type) return -1;
       if (et == (jl_value_t*)jl_float64_type) return read_as<double>(a, n, seq);
       if (et == (jl_value_t*)jl_int64_type) return read_as<int64_t>(a, n, seq);
       if (et == (jl_value_t*)jl_bool_type) return read_as<uint8_t>(a, n, seq);
