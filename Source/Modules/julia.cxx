@@ -886,7 +886,7 @@ public:
       res = NewStringf("jl_box_bool((%s) ? 1 : 0)", expr);
     else if (SwigType_isenum(r) || Strcmp(s, "int") == 0 || Strcmp(s, "long") == 0 ||
              Strcmp(s, "long long") == 0 || Strcmp(s, "short") == 0 || Strcmp(s, "size_t") == 0 ||
-             Strstr(s, "unsigned") || Strcmp(s, "casadi_int") == 0)
+             Strstr(s, "unsigned"))
       res = NewStringf("jl_box_int64((int64_t)(%s))", expr);
     else if (Strcmp(s, "std::string") == 0 || Strcmp(s, "string") == 0)
       res = NewStringf("jl_cstr_to_string((%s).c_str())", expr);
@@ -915,7 +915,7 @@ public:
       res = NewString("Bool");
     else if (SwigType_isenum(r) || Strcmp(s, "int") == 0 || Strcmp(s, "long") == 0 ||
              Strcmp(s, "long long") == 0 || Strcmp(s, "short") == 0 || Strcmp(s, "size_t") == 0 ||
-             Strstr(s, "unsigned") || Strcmp(s, "casadi_int") == 0)
+             Strstr(s, "unsigned"))
       res = NewString("Int64");
     else if (Strcmp(s, "std::string") == 0 || Strcmp(s, "string") == 0)
       res = NewString("String");
@@ -1060,9 +1060,12 @@ public:
     Swig_typemap_attach_parms("jltype", retp, 0);
     Swig_typemap_attach_parms("jlout", retp, 0);
 
-    String *ret_ct = Getattr(retp, "tmap:ctype:out");
+    Swig_typemap_attach_parms("out", retp, 0);   /* an out typemap may declare the types of its $result */
+    String *ret_ct = Getattr(retp, "tmap:out:ctype");
+    if (!ret_ct) ret_ct = Getattr(retp, "tmap:ctype:out");
     if (!ret_ct) ret_ct = Getattr(retp, "tmap:ctype");
-    String *ret_jt = Getattr(retp, "tmap:jltype:out");
+    String *ret_jt = Getattr(retp, "tmap:out:jltype");
+    if (!ret_jt) ret_jt = Getattr(retp, "tmap:jltype:out");
     if (!ret_jt) ret_jt = Getattr(retp, "tmap:jltype");
     String *ret_jlout = Getattr(retp, "tmap:jlout");
     String *ret_proxy = proxy_name(returntype);
@@ -1575,7 +1578,7 @@ public:
     /* class-scope: reference the fully-qualified C++ name in the getter */
     String *cref = (class_jlname && Getattr(n, "name")) ? Getattr(n, "name") : value;
     if (Strcmp(ts, "int") == 0 || Strcmp(ts, "long") == 0 || Strstr(ts, "long long")) {
-      /* value may be a C++ qualified name (casadi::OP_ADD); emit a C getter */
+      /* value may be a C++ qualified name (ns::VALUE); emit a C getter */
       Printf(f_wrappers, "extern \"C\" SWIGEXPORT long long _swig_const_%s() { return (long long)(%s); }\n",
              symname, cref);
       Printf(f_jl_body, "const %s = Int(ccall((:_swig_const_%s, _lib), Clonglong, ()))\n",

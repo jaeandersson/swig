@@ -23,7 +23,8 @@
 %typemap(ctype)  double, const double&, float, const float& "double"
 %typemap(in)     double, float %{ $1 = ($1_ltype)$input; %}
 %typemap(in)     const double& (double tmp), const float& (float tmp) %{ tmp = ($*1_ltype)$input; $1 = &tmp; %}
-%typemap(out)    double, const double&, float, const float& %{ $result = (double)$1; %}
+%typemap(out, ctype="double", jltype="Cdouble") double, float %{ $result = (double)$1; %}
+%typemap(out, ctype="double", jltype="Cdouble") const double&, const float& %{ $result = (double)*$1; %}
 %typemap(jltype) double, const double&, float, const float& "Cdouble"
 %typemap(jlparam) double, const double&, float, const float& "Real"
 %typemap(jlout)  double, const double&, float, const float& "_check($call)"
@@ -31,14 +32,16 @@
 %typemap(ctype)  int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, const long long& "long long"
 %typemap(in)     int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short %{ $1 = ($1_ltype)$input; %}
 %typemap(in)     const long long& (long long tmp) %{ tmp = $input; $1 = ($1_ltype)&tmp; %}
-%typemap(out)    int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, const long long& %{ $result = (long long)$1; %}
+%typemap(out, ctype="long long", jltype="Clonglong") int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short %{ $result = (long long)$1; %}
+%typemap(out, ctype="long long", jltype="Clonglong") const long long& %{ $result = (long long)*$1; %}
 %typemap(jltype) int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, const long long& "Clonglong"
 %typemap(jlparam) int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, const long long& "Integer"
 %typemap(jlout)  int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, const long long& "Int(_check($call))"
 
 %typemap(ctype)  bool, const bool& "unsigned char"
 %typemap(in)     bool %{ $1 = $input != 0; %}
-%typemap(out)    bool, const bool& %{ $result = $1 ? 1 : 0; %}
+%typemap(out, ctype="unsigned char", jltype="Cuchar") bool %{ $result = $1 ? 1 : 0; %}
+%typemap(out, ctype="unsigned char", jltype="Cuchar") const bool& %{ $result = *$1 ? 1 : 0; %}
 %typemap(jltype) bool, const bool& "Cuchar"
 %typemap(jlparam) bool, const bool& "Bool"
 %typemap(jlout)  bool, const bool& "_check($call) != 0"
@@ -53,7 +56,8 @@
 %typemap(ctype, out="char *") std::string, const std::string& "const char *"
 %typemap(in)     std::string %{ $1 = std::string($input); %}
 %typemap(in)     const std::string& (std::string tmp) %{ tmp = std::string($input); $1 = &tmp; %}
-%typemap(out)    std::string, const std::string& %{ $result = swig_jl_strdup($1); %}
+%typemap(out, ctype="char *", jltype="Ptr{UInt8}") std::string %{ $result = swig_jl_strdup($1); %}
+%typemap(out, ctype="char *", jltype="Ptr{UInt8}") const std::string& %{ $result = swig_jl_strdup(*$1); %}
 %typemap(jltype) std::string, const std::string& "Cstring"
 %typemap(jltype, out="Ptr{UInt8}") std::string, const std::string& "Cstring"
 %typemap(jlparam) std::string, const std::string& "AbstractString"
@@ -62,7 +66,7 @@
 %typemap(ctype)  char *, const char * "const char *"
 %typemap(ctype, out="char *") char *, const char * "const char *"
 %typemap(in)     char *, const char * %{ $1 = ($1_ltype)$input; %}
-%typemap(out)    char *, const char * %{ $result = swig_jl_strdup($1 ? std::string($1) : std::string()); %}
+%typemap(out, ctype="char *", jltype="Ptr{UInt8}") char *, const char * %{ $result = swig_jl_strdup($1 ? std::string($1) : std::string()); %}
 %typemap(jltype) char *, const char * "Cstring"
 %typemap(jltype, out="Ptr{UInt8}") char *, const char * "Cstring"
 %typemap(jlparam) char *, const char * "AbstractString"
@@ -90,7 +94,8 @@
 %typemap(ctype)  enum SWIGTYPE, const enum SWIGTYPE& "long long"
 %typemap(in)     enum SWIGTYPE %{ $1 = ($1_ltype)(long long)$input; %}
 %typemap(in)     const enum SWIGTYPE& ($*1_ltype tmp) %{ tmp = ($*1_ltype)(long long)$input; $1 = &tmp; %}
-%typemap(out)    enum SWIGTYPE, const enum SWIGTYPE& %{ $result = (long long)$1; %}
+%typemap(out, ctype="long long", jltype="Clonglong") enum SWIGTYPE %{ $result = (long long)$1; %}
+%typemap(out, ctype="long long", jltype="Clonglong") const enum SWIGTYPE& %{ $result = (long long)*$1; %}
 %typemap(jltype) enum SWIGTYPE, const enum SWIGTYPE& "Clonglong"
 %typemap(jlparam) enum SWIGTYPE, const enum SWIGTYPE& "Union{Integer,Base.Enums.Enum}"
 %typemap(jlout)  enum SWIGTYPE, const enum SWIGTYPE& "Int(_check($call))"
@@ -101,12 +106,22 @@
 %typemap(in)     SWIGTYPE& %{ $1 = ($1_ltype)$input; %}
 %typemap(in)     const SWIGTYPE& %{ $1 = ($1_ltype)$input; %}
 %typemap(in)     SWIGTYPE* %{ $1 = ($1_ltype)$input; %}
-%typemap(out)    SWIGTYPE %{ $result = (void*) new $1_ltype($1); %}
-%typemap(out)    SWIGTYPE& %{ $result = (void*) new $*1_ltype(*$1); %}
-%typemap(out)    const SWIGTYPE& %{ $result = (void*) new $*1_ltype(*$1); %}
-%typemap(out)    SWIGTYPE* %{ $result = (void*)$1; %}
+%typemap(out, ctype="void *", jltype="Ptr{Cvoid}") SWIGTYPE %{ $result = (void*) new $1_ltype($1); %}
+%typemap(out, ctype="void *", jltype="Ptr{Cvoid}") SWIGTYPE& %{ $result = (void*) new $*1_ltype(*$1); %}
+%typemap(out, ctype="void *", jltype="Ptr{Cvoid}") const SWIGTYPE& %{ $result = (void*) new $*1_ltype(*$1); %}
+%typemap(out, ctype="void *", jltype="Ptr{Cvoid}") SWIGTYPE* %{ $result = (void*)$1; %}
 %typemap(jltype) SWIGTYPE, SWIGTYPE&, const SWIGTYPE&, SWIGTYPE* "Ptr{Cvoid}"
 /* jlparam / jlout for class types are computed by the backend (proxy name). */
+
+/* Arguments of a type converted from any Julia value cross as the object; refs/pointers via SWIG_ConvertPtr */
+%define %julia_value_type(TYPE...)
+%typemap(ctype)  TYPE, const TYPE&, TYPE&, TYPE* "jl_value_t*"
+%typemap(jltype) TYPE, const TYPE&, TYPE&, TYPE* "Any"
+%typemap(in, noblock=1) TYPE&, TYPE* {
+  if (!SWIG_IsOK(SWIG_ConvertPtr($input, reinterpret_cast<void**>(&$1), $1_descriptor, 0)))
+    SWIG_exception_fail(SWIG_TypeError, "Failed to convert input $argnum to type '$1_basetype'.");
+}
+%enddef
 
 /* ---- jl_value_t* route: composite values cross as native Julia values.
  * The wrapper compiles against julia.h but does NOT link libjulia; jl_*
@@ -236,7 +251,8 @@ static jl_value_t* swig_jl_make_tuple2(jl_value_t* a, jl_value_t* b) {
 %typemap(ctype, fragment="SwigJlRuntime")  std::vector<double>, const std::vector<double>& "jl_value_t*"
 %typemap(in)     std::vector<double> %{ $1 = swig_jl_to_vec_double($input); %}
 %typemap(in)     const std::vector<double>& (std::vector<double> tmp) %{ tmp = swig_jl_to_vec_double($input); $1 = &tmp; %}
-%typemap(out)    std::vector<double>, const std::vector<double>& %{ $result = swig_jl_from_vec_double($1); %}
+%typemap(out, ctype="jl_value_t*", jltype="Any") std::vector<double> %{ $result = swig_jl_from_vec_double($1); %}
+%typemap(out, ctype="jl_value_t*", jltype="Any") const std::vector<double>& %{ $result = swig_jl_from_vec_double(*$1); %}
 %typemap(jltype) std::vector<double>, const std::vector<double>& "Any"
 %typemap(jlparam) std::vector<double>, const std::vector<double>& "AbstractVector{<:Real}"
 %typemap(jlout)  std::vector<double>, const std::vector<double>& "_check($call)::Vector{Float64}"
@@ -244,7 +260,8 @@ static jl_value_t* swig_jl_make_tuple2(jl_value_t* a, jl_value_t* b) {
 %typemap(ctype, fragment="SwigJlRuntime")  std::vector<long long>, const std::vector<long long>& "jl_value_t*"
 %typemap(in)     std::vector<long long> %{ $1 = swig_jl_to_vec_int($input); %}
 %typemap(in)     const std::vector<long long>& (std::vector<long long> tmp) %{ tmp = swig_jl_to_vec_int($input); $1 = &tmp; %}
-%typemap(out)    std::vector<long long>, const std::vector<long long>& %{ $result = swig_jl_from_vec_int($1); %}
+%typemap(out, ctype="jl_value_t*", jltype="Any") std::vector<long long> %{ $result = swig_jl_from_vec_int($1); %}
+%typemap(out, ctype="jl_value_t*", jltype="Any") const std::vector<long long>& %{ $result = swig_jl_from_vec_int(*$1); %}
 %typemap(jltype) std::vector<long long>, const std::vector<long long>& "Any"
 %typemap(jlparam) std::vector<long long>, const std::vector<long long>& "AbstractVector{<:Integer}"
 %typemap(jlout)  std::vector<long long>, const std::vector<long long>& "_check($call)::Vector{Int64}"
@@ -252,7 +269,8 @@ static jl_value_t* swig_jl_make_tuple2(jl_value_t* a, jl_value_t* b) {
 %typemap(ctype, fragment="SwigJlRuntime")  std::vector<std::string>, const std::vector<std::string>& "jl_value_t*"
 %typemap(in)     std::vector<std::string> %{ $1 = swig_jl_to_vec_string($input); %}
 %typemap(in)     const std::vector<std::string>& (std::vector<std::string> tmp) %{ tmp = swig_jl_to_vec_string($input); $1 = &tmp; %}
-%typemap(out)    std::vector<std::string>, const std::vector<std::string>& %{ $result = swig_jl_from_vec_string($1); %}
+%typemap(out, ctype="jl_value_t*", jltype="Any") std::vector<std::string> %{ $result = swig_jl_from_vec_string($1); %}
+%typemap(out, ctype="jl_value_t*", jltype="Any") const std::vector<std::string>& %{ $result = swig_jl_from_vec_string(*$1); %}
 %typemap(jltype) std::vector<std::string>, const std::vector<std::string>& "Any"
 %typemap(jlparam) std::vector<std::string>, const std::vector<std::string>& "AbstractVector{<:AbstractString}"
 %typemap(jlout)  std::vector<std::string>, const std::vector<std::string>& "_check($call)::Vector{String}"
@@ -282,7 +300,7 @@ static jl_value_t* swig_jl_make_tuple2(jl_value_t* a, jl_value_t* b) {
 %typemap(jlparam) jl_value_t * "Any"
 %typemap(jlout)   jl_value_t * "_check($call)"
 
-/* ---- runtime support for interface libraries (casadi.i-style) ----
+/* ---- runtime support for interface libraries ----
  * Pointer carriers: a Julia proxy (mutable struct with a `ptr::Ptr{Cvoid}`
  * field) crosses as jl_value_t*; SWIG_ConvertPtr reads the field.  Type
  * validation is deferred to Julia-side dispatch on the proxy types. */

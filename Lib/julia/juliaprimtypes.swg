@@ -2,7 +2,7 @@
  *
  * Primitive-type SWIG_AsVal / SWIG_From fragments for the -julia target,
  * operating on jl_value_t* (the julia GUESTOBJECT*).  Used by interface
- * libraries (e.g. casadi.i) that route fuzzy coercion through SWIG_AsVal.
+ * libraries that route fuzzy coercion through SWIG_AsVal.
  */
 
 %include <typemaps/swigmacros.swg>
