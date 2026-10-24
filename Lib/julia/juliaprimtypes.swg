@@ -44,6 +44,12 @@ SWIGINTERN bool SWIG_jl_real_to_double(jl_value_t* p, double* d) {
 %fragment(SWIG_AsVal_frag(T), "header", fragment="SWIG_jl_real_to_double") {
 SWIGINTERN int SWIG_AsVal_dec(T)(jl_value_t* p, T* val) {
   if (!p) return SWIG_ERROR;
+  if (std::is_integral< T >::value && jl_typeis(p, jl_int64_type)) {
+    int64_t i = jl_unbox_int64(p);  /* exact: typemax(Int) does not survive a double */
+    if (static_cast<int64_t>(static_cast< T >(i)) != i) return SWIG_ERROR;
+    if (val) *val = static_cast< T >(i);
+    return SWIG_OK;
+  }
   double d;
   if (!SWIG_jl_real_to_double(p, &d)) return SWIG_ERROR;
   if (std::is_integral< T >::value &&

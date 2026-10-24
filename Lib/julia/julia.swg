@@ -246,7 +246,7 @@ static jl_value_t* swig_jl_make_tuple2(jl_value_t* a, jl_value_t* b) {
 %typemap(in)     const std::vector<long long>& (std::vector<long long> tmp) %{ tmp = swig_jl_to_vec_int($input); $1 = &tmp; %}
 %typemap(out)    std::vector<long long>, const std::vector<long long>& %{ $result = swig_jl_from_vec_int($1); %}
 %typemap(jltype) std::vector<long long>, const std::vector<long long>&, std::vector<casadi_int>, const std::vector<casadi_int>& "Any"
-%typemap(jlparam) std::vector<long long>, const std::vector<long long>&, std::vector<casadi_int>, const std::vector<casadi_int>& "AbstractVector{<:Integer}"
+%typemap(jlparam) std::vector<long long>, const std::vector<long long>&, std::vector<casadi_int>, const std::vector<casadi_int>& "Union{AbstractVector{<:Integer},Vector{Any}}"
 %typemap(jlout)  std::vector<long long>, const std::vector<long long>& "_check($call)::Vector{Int64}"
 
 %typemap(ctype, fragment="SwigJlRuntime")  std::vector<std::string>, const std::vector<std::string>& "jl_value_t*"
