@@ -548,7 +548,60 @@ int Language::use_naturalvar_mode(Node *n) const {
 }
 
 /* ----------------------------------------------------------------------
- * Language::top()   - Top of parsing tree 
+ * docstring_select_lang()
+ *
+ * %feature("docstring:lang", "name") keeps the docstring sections written for one
+ * target language. A section runs from a line "<lang:name>" to a line "</lang>":
+ * it is kept, without the marker lines, when its name matches the feature value,
+ * and dropped otherwise. Without the feature, every section is kept.
+ * ---------------------------------------------------------------------- */
+
+static String *docstring_select_lang(String *doc, String *lang) {
+  if (!Strstr(doc, "<lang:")) return 0;
+  String *ret = NewStringEmpty();
+  List *lines = SplitLines(doc);
+  bool in_section = false, keep = true, first = true;
+  for (int i = 0; i < Len(lines); ++i) {
+    String *line = Getitem(lines, i);
+    String *s = Copy(line);
+    Chop(s);
+    char *c = Char(s);
+    while (*c == ' ' || *c == '\t') ++c;
+    if (!in_section && strncmp(c, "<lang:", 6) == 0 && c[strlen(c) - 1] == '>') {
+      String *name = NewStringWithSize(c + 6, (int)strlen(c) - 7);
+      in_section = true;
+      keep = !lang || Equal(name, lang);
+      Delete(name);
+    } else if (in_section && strcmp(c, "</lang>") == 0) {
+      in_section = false;
+      keep = true;
+    } else if (keep) {
+      if (!first) Append(ret, "\n");
+      Append(ret, line);
+      first = false;
+    }
+    Delete(s);
+  }
+  Delete(lines);
+  return ret;
+}
+
+static void docstrings_select_lang(Node *n) {
+  for (Node *c = n; c; c = nextSibling(c)) {
+    String *doc = Getattr(c, "feature:docstring");
+    if (doc) {
+      String *selected = docstring_select_lang(doc, Getattr(c, "feature:docstring:lang"));
+      if (selected) {
+	Setattr(c, "feature:docstring", selected);
+	Delete(selected);
+      }
+    }
+    docstrings_select_lang(firstChild(c));
+  }
+}
+
+/* ----------------------------------------------------------------------
+ * Language::top()   - Top of parsing tree
  * ---------------------------------------------------------------------- */
 
 int Language::top(Node *n) {
@@ -562,6 +615,7 @@ int Language::top(Node *n) {
     }
   }
   classhash = Getattr(n, "classes");
+  docstrings_select_lang(firstChild(n));
   return emit_children(n);
 }
 
