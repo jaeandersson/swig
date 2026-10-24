@@ -42,6 +42,7 @@ class JULIA : public Language {
   Hash   *class_bases;    /* class jlname -> List of base jlnames */
   String *class_jlname;   /* sym:name of class being processed, 0 outside */
   String *bare_symname;   /* unqualified member name captured pre-transform */
+  String *memberget_field; /* data member whose getter is being wrapped */
   Hash   *enum_seen;      /* @enum type names already emitted (dedup) */
   Hash   *director_classes; /* C++ classname -> "1" for director-enabled classes */
   Hash   *jl_docs;        /* Julia fname -> List of documentation sections (customdoc) */
@@ -54,7 +55,7 @@ public:
   JULIA() : f_begin(0), f_runtime(0), f_header(0), f_wrappers(0), f_init(0),
             f_jl_types(0), f_jl_body(0), f_jl_exports(0), f_directors(0), f_directors_h(0), module_name(0),
             f_type_init(0), f_proxy_pairs(0), jl_methods(0), jl_method_order(0), class_statics(0), class_members(0), class_methods(0), class_bases(0), class_jlname(0),
-            bare_symname(0), enum_seen(0), director_classes(0), jl_docs(0), jl_doc_order(0), in_ctor(false), in_static(false), class_has_copyctor(false), n_skipped(0) {}
+            bare_symname(0), memberget_field(0), enum_seen(0), director_classes(0), jl_docs(0), jl_doc_order(0), in_ctor(false), in_static(false), class_has_copyctor(false), n_skipped(0) {}
 
   virtual void main(int argc, char *argv[]) {
     (void)argc; (void)argv;
@@ -496,7 +497,7 @@ public:
       Hash *flat = NewHash(); Hash *seen = NewHash();
       collect_flattened_methods(cls, flat, seen);
       Delete(seen);
-      if (Len(flat) > 0) {
+      if (Len(flat) > 0 || Getattr(class_methods, cls)) {
         String *set = NewString("");
         String *props = NewString("");
         Iterator mi = First(flat);
@@ -1085,6 +1086,7 @@ public:
   /* ---- the single emission point: every callable lands here ---- */
 
   virtual int functionWrapper(Node *n) {
+    if (Getattr(n, "memberset")) return SWIG_OK;  /* data members are read-only */
     String *symname = Getattr(n, "sym:name");
     String *overname = Getattr(n, "sym:overname");
     SwigType *returntype = Getattr(n, "type");
@@ -1396,6 +1398,18 @@ public:
       Delete(body); body = b2;
     }
 
+    if (memberget_field && Getattr(n, "memberget")) {
+      if (Len(preserve) > 0)
+        Printf(f_jl_body, "_swig_getproperty(self::%s, ::Val{:%s}) = GC.@preserve %sbegin %s end\n",
+               class_jlname, memberget_field, preserve, body);
+      else
+        Printf(f_jl_body, "_swig_getproperty(self::%s, ::Val{:%s}) = %s\n", class_jlname, memberget_field, body);
+      Delete(body); Delete(callcore); Delete(csig); Delete(jargs); Delete(jccall_types); Delete(jccall_args);
+      Delete(preserve); Delete(wname);
+      if (ret_proxy) Delete(ret_proxy);
+      DelWrapper(w);
+      return SWIG_OK;
+    }
     String *fname = in_ctor ? Copy(class_jlname)
                   : bare_symname ? Copy(bare_symname) : Copy(symname);
     /* eval/include are auto-bound in every Julia module and cannot be
@@ -1909,7 +1923,16 @@ public:
   }
 
   virtual int destructorHandler(Node *) { return SWIG_OK; } /* emitted in classHandler */
-  virtual int membervariableHandler(Node *) { return SWIG_OK; }    /* later */
+  /* public data members: obj.field reads them through _swig_getproperty */
+  virtual int membervariableHandler(Node *n) {
+    if (!class_jlname) return SWIG_OK;
+    memberget_field = Copy(Getattr(n, "sym:name"));
+    if (!class_methods) class_methods = NewHash();
+    if (!Getattr(class_methods, class_jlname)) Setattr(class_methods, class_jlname, NewHash());
+    int r = Language::membervariableHandler(n);
+    Delete(memberget_field); memberget_field = 0;
+    return r;
+  }
   virtual int staticmembervariableHandler(Node *) { return SWIG_OK; }
   virtual int globalvariableHandler(Node *) { return SWIG_OK; }
 };
