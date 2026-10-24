@@ -650,7 +650,8 @@ public:
     Printf(jf, "end\n\n");
     Printf(jf,
       "struct SwigError <: Exception\n    msg::String\nend\n"
-      "Base.showerror(io::IO, e::SwigError) = print(io, \"%s error: \", e.msg)\n\n"
+      "Base.showerror(io::IO, e::SwigError) = print(io, \"%s error: \", e.msg)\n"
+      "Base.show(io::IO, e::SwigError) = print(io, \"SwigError(\", repr(e.msg), \")\")\n\n"
       "function _check(v)\n"
       "    if ccall((:swig_jl_last_error_code, _lib), Cint, ()) != 0\n"
       "        throw(SwigError(unsafe_string(ccall((:swig_jl_last_error_msg, _lib), Cstring, ()))))\n"
