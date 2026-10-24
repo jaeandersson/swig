@@ -192,16 +192,6 @@ public:
     return false;
   }
 
-  /* replace the bare Julia identifier `nm` with `rep` wherever it appears as a
-     call/preserve argument token (",-", "( ", " " or trailing ")") -- the same
-     token shapes the drain's arg-rename pass relies on. */
-  void replace_arg_token(String *buf, String *nm, String *rep) {
-    String *p, *r;
-    p = NewStringf("%s, ", nm); r = NewStringf("%s, ", rep); Replaceall(buf, p, r); Delete(p); Delete(r);
-    p = NewStringf("%s ", nm);  r = NewStringf("%s ", rep);  Replaceall(buf, p, r); Delete(p); Delete(r);
-    p = NewStringf("%s)", nm);  r = NewStringf("%s)", rep);  Replaceall(buf, p, r); Delete(p); Delete(r);
-  }
-
   /* rebuild jl_methods / jl_method_order so each collected method with trailing
      default args becomes one entry per reachable arity (default-free). */
   void expand_default_arg_arities() {
@@ -233,8 +223,8 @@ public:
           String *jargs = Copy(Getattr(e, "jccall_args"));
           for (int i = a; i < total; ++i) {
             String *pn = (String *)Getitem(names, i), *dv = (String *)Getitem(defs, i);
-            replace_arg_token(body, pn, dv);
-            replace_arg_token(jargs, pn, dv);
+            rename_ident(body, pn, dv);
+            rename_ident(jargs, pn, dv);
             /* a dropped param can't still be GC-preserved (it has no binding) */
             String *pp = NewStringf("%s ", pn); Replaceall(pres, pp, ""); Delete(pp);
           }
