@@ -125,6 +125,13 @@ SWIGRUNTIME jl_value_t* SWIG_AppendOutput(jl_value_t* cur, jl_value_t* x) {
   JL_GC_POP();
   return r;
 }
+/* output arguments of a value-returning function: pushed onto a Julia vector */
+SWIGRUNTIME void swig_jl_push_output(jl_value_t* outs, jl_value_t* x) {
+  JL_GC_PUSH1(&x);
+  jl_value_t* r = jl_call2(jl_get_function(jl_base_module, "push!"), outs, x);
+  JL_GC_POP();
+  if (!r) throw std::runtime_error("push! failed");
+}
 %}
 %insert(runtime) %{
 /* single-module process: no cross-module type sharing */

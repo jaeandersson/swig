@@ -1224,8 +1224,8 @@ public:
       String *call = Swig_cfunction_call(Getattr(n, "name"), parms);
       Setattr(n, "wrap:action", Swig_cresult(returntype, Swig_cresult_name(), call));
     }
-    /* collect argout parms (numinputs=0 + tmap:argout): void-returning
-       functions hand them back as the Julia return value */
+    /* collect argout parms (numinputs=0 + tmap:argout): void-returning functions hand
+       them back as the Julia return value, others as (result, outputs...) */
     List *argouts = NewList();
     for (Parm *q = parms; q; q = nextSibling(q)) {
       if (checkAttribute(q, "tmap:in:numinputs", "0") && Getattr(q, "tmap:argout"))
@@ -1233,6 +1233,7 @@ public:
     }
     bool is_void = Strcmp(ret_ct, "void") == 0;
     bool argout_mode = is_void && Len(argouts) > 0;
+    bool extra_outs = !is_void && Len(argouts) > 0;
     if (argout_mode) {
       ret_ct = NewString("jl_value_t*");
       ret_jt = NewString("Any");
@@ -1246,8 +1247,9 @@ public:
     if (Strstr(actioncode, "upcall")) Wrapper_add_local(w, "upcall", "bool upcall = false");
 
     String *outtm = 0;
-    if (argout_mode) {
-      outtm = NewString("");
+    String *argouttm = NewString("");
+    if (argout_mode || extra_outs) {
+      String *outtm = argouttm;
       for (int ai = 0; ai < Len(argouts); ++ai) {
         Parm *q = (Parm *)Getitem(argouts, ai);
         /* container output-args (std::vector<E>&, std::pair&): the generic
@@ -1269,6 +1271,10 @@ public:
         Printv(outtm, b, "\n", NIL);
         Delete(b);
       }
+      if (extra_outs) Replaceall(argouttm, "_outv = SWIG_AppendOutput(_outv, ", "swig_jl_push_output(jouts, ");
+    }
+    if (argout_mode) {
+      outtm = argouttm;
     } else if (synth_out) {
       /* the standard 'out' path embeds the action in the typemap; the synth
          path supplies only the marshaling, so run the action first. */
@@ -1285,6 +1291,7 @@ public:
       Replaceall(outtm, "$result", "_outv");
     }
 
+    if (extra_outs) Printf(csig, "%sjl_value_t* jouts", Len(csig) ? ", " : "");
     Printf(f_wrappers, "extern \"C\" SWIGEXPORT %s %s(%s) {\n  SWIG_JL_ENTER();\n  try {\n",
            ret_ct, wname, Len(csig) ? Char(csig) : "void");
     Printv(f_wrappers, w->locals, NIL);
@@ -1296,14 +1303,16 @@ public:
     } else {
       if (argout_mode) Printv(f_wrappers, actioncode, NIL);
       Printv(f_wrappers, outtm, "\n", NIL);
+      if (extra_outs) Printv(f_wrappers, argouttm, NIL);
       Printf(f_wrappers, "  return _outv;\n");
     }
     Printf(f_wrappers, "  } SWIG_JL_CATCH(%s)\n}\n\n",
            is_void ? "" : (Strstr(ret_ct, "*") ? "0" : (Strcmp(ret_ct, "double") == 0 ? "0.0" : "0")));
 
     /* ---- Julia side ---- */
-    String *callcore = NewStringf("ccall((:%s, _lib), %s, (%s), %s)",
-                                  wname, ret_jt, jccall_types, jccall_args);
+    String *callcore = extra_outs
+      ? NewStringf("ccall((:%s, _lib), %s, (%sAny, ), %s_swigjl_outs, )", wname, ret_jt, jccall_types, jccall_args)
+      : NewStringf("ccall((:%s, _lib), %s, (%s), %s)", wname, ret_jt, jccall_types, jccall_args);
     String *body = 0;
     if (argout_mode) {
       body = NewStringf("_check(%s)", callcore);
@@ -1314,6 +1323,10 @@ public:
     } else {
       body = Copy(ret_jlout);
       Replaceall(body, "$call", callcore);
+    }
+    if (extra_outs) {
+      String *b2 = NewStringf("let _swigjl_outs = Any[]; (%s, _swigjl_outs...) end", body);
+      Delete(body); body = b2;
     }
 
     String *fname = in_ctor ? Copy(class_jlname)
