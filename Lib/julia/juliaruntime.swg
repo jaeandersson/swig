@@ -125,6 +125,19 @@ SWIGRUNTIME jl_value_t* SWIG_AppendOutput(jl_value_t* cur, jl_value_t* x) {
   JL_GC_POP();
   return r;
 }
+/* Vector{Any} narrowed to Vector{elt}; unchanged if an element does not convert */
+SWIGRUNTIME jl_value_t* swig_jl_narrow(jl_value_t* a, jl_value_t* elt) {
+  jl_value_t* r = 0;
+  JL_GC_PUSH2(&a, &r);
+  r = jl_call2(jl_get_function(jl_base_module, "convert"), jl_apply_array_type(elt, 1), a);
+  if (!r) { jl_exception_clear(); r = a; }
+  JL_GC_POP();
+  return r;
+}
+SWIGRUNTIME jl_value_t* swig_jl_proxy_type(const char* jlname) {
+  std::map<std::string, jl_value_t*>::iterator it = swig_jl_proxy_types().find(jlname);
+  return it == swig_jl_proxy_types().end() ? (jl_value_t*)jl_any_type : it->second;
+}
 /* output arguments of a value-returning function: pushed onto a Julia vector */
 SWIGRUNTIME void swig_jl_push_output(jl_value_t* outs, jl_value_t* x) {
   JL_GC_PUSH1(&x);

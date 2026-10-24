@@ -993,6 +993,15 @@ public:
           *jlout = NewString("_check($call)::Vector");
           String *es = SwigType_str(SwigType_typedef_resolve_all(et), 0);
           String *box = elem_box(et, "__e");
+          String *elt = julia_eltype(et);
+          String *eltc = 0;
+          if (elt) eltc = NewStringf("(jl_value_t*)jl_%s_type", Strcmp(elt, "Float64") == 0 ? "float64" :
+                                     Strcmp(elt, "Int64") == 0 ? "int64" : Strcmp(elt, "Bool") == 0 ? "bool" : "string");
+          else {
+            String *pn = proxy_name(et);
+            eltc = pn ? NewStringf("swig_jl_proxy_type(\"%s\")", pn) : NewString("(jl_value_t*)jl_any_type");
+            if (pn) Delete(pn);
+          }
           *outcode = NewString("");
           Printf(*outcode,
             "  { %s\n"
@@ -1003,8 +1012,10 @@ public:
             "      const %s& __e = __r[__i];\n"
             "      swig_jl_aset((jl_value_t*)__ja, __i, %s);\n"
             "    }\n"
-            "    JL_GC_POP();\n    $result = (jl_value_t*)__ja; }", bind, es, box);
-          Delete(es); Delete(box); Delete(probe);
+            "    $result = swig_jl_narrow((jl_value_t*)__ja, %s);\n"
+            "    JL_GC_POP(); }", bind, es, box, eltc);
+          Delete(es); Delete(box); Delete(probe); Delete(eltc);
+          if (elt) Delete(elt);
           done = true;
         }
       } else if (is_pair) {
