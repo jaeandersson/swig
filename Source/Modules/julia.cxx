@@ -943,6 +943,26 @@ public:
     return res;
   }
 
+  /* Julia literal for a std::numeric_limits<T>::f() default, or 0 */
+  String *julia_limit(String *dv) {
+    const char *c = Char(dv), *lt = strstr(c, "numeric_limits<"), *gt = lt ? strrchr(c, '>') : 0;
+    if (!lt || !gt) return 0;
+    String *ts = NewStringWithSize(lt + 15, (int)(gt - lt - 15));
+    Replaceall(ts, " ", "");
+    String *et = julia_eltype(ts);
+    Delete(ts);
+    if (!et) return 0;
+    bool isf = Strcmp(et, "Float64") == 0;
+    String *res = 0;
+    if (strstr(gt, "::max()")) res = NewStringf(isf ? "floatmax(%s)" : "typemax(%s)", et);
+    else if (strstr(gt, "::lowest()")) res = NewStringf(isf ? "-floatmax(%s)" : "typemin(%s)", et);
+    else if (strstr(gt, "::min()")) res = NewStringf(isf ? "floatmin(%s)" : "typemin(%s)", et);
+    else if (isf && strstr(gt, "::infinity()")) res = NewString("Inf");
+    else if (isf && strstr(gt, "::epsilon()")) res = NewString("eps(Float64)");
+    Delete(et);
+    return res;
+  }
+
   /* Empty Julia literal for a default-constructed std::vector<E>/std::map<K,V>
      argument.  With a known element kind, emit the precise typed literal
      ("Float64[]", "Dict{String,Int64}()", "Dict{String,Vector{String}}()");
@@ -1173,8 +1193,12 @@ public:
                opaque-ptr class/container args (passed as `.ptr`, see below)
                get the wrapped default ctor; by-value (jl_value_t*) containers
                get an empty Julia literal matching their jlparam annotation. */
-            if (!jp && pproxy && !jl_any) Printf(jdv, "%s()", pproxy);
-            else {
+            if (pproxy && !SwigType_istemplate(SwigType_typedef_resolve_all(Getattr(p, "type"))))
+              Printf(jdv, "%s()", pproxy);
+            else if (Strstr(dv, "numeric_limits<")) {
+              String *lit = julia_limit(dv);
+              if (lit) { Printv(jdv, lit, NIL); Delete(lit); }
+            } else {
               String *lit = julia_empty_default(Getattr(p, "type"), jl_any);
               if (lit) { Printv(jdv, lit, NIL); Delete(lit); }
             }
@@ -1183,6 +1207,8 @@ public:
             for (const char *c = Char(dv); *c; ++c)
               if (!(isdigit(*c) || *c == '.' || *c == '-' || *c == '+' || *c == 'e')) { numeric = false; break; }
             if (numeric) Printv(jdv, dv, NIL);
+            else if (Strcmp(dv, "inf") == 0 || Strcmp(dv, "casadi::inf") == 0) Printv(jdv, "Inf", NIL);
+            else if (Strcmp(dv, "-inf") == 0 || Strcmp(dv, "-casadi::inf") == 0) Printv(jdv, "-Inf", NIL);
           }
         }
         Append(jarg_defaults, jdv);
