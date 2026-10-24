@@ -520,8 +520,7 @@ public:
           "    s in fieldnames(%s) && return getfield(x, s)\n"
           "%s"
           "    if s in _swigjl_methods_%s\n"
-          "        f = getfield(@__MODULE__, s)\n"
-          "        return (args...; kw...) -> f(x, args...; kw...)\n"
+          "        return _SwigBound(getfield(@__MODULE__, s), x)\n"
           "    end\n"
           "    return _swig_getproperty(x, Val(s))\n"
           "end\n",
@@ -561,7 +560,7 @@ public:
         while (si.key) {
           Printf(jf,
             "    %s s === :%s\n"
-            "        return (args...; kw...) -> %s(%s, args...; kw...)\n",
+            "        return _SwigBound(%s, %s)\n",
             first ? "if" : "elseif", si.key, si.key, cls);
           first = false;
           si = Next(si);
@@ -656,6 +655,12 @@ public:
       "    if ccall((:swig_jl_last_error_code, _lib), Cint, ()) != 0\n"
       "        throw(SwigError(unsafe_string(ccall((:swig_jl_last_error_msg, _lib), Cstring, ()))))\n"
       "    end\n    v\nend\n\n"
+      "# obj.method / T.static: the method bound to its object, callable like a closure\n"
+      "struct _SwigBound{F,S} <: Base.Function\n    f::F\n    self::S\nend\n"
+      "(b::_SwigBound)(args...; kw...) = b.f(b.self, args...; kw...)\n"
+      "Base.show(io::IO, b::_SwigBound) = b.self isa Type ? print(io, nameof(b.self), \".\", nameof(b.f)) :\n"
+      "    print(io, nameof(b.f), \" bound to a \", nameof(typeof(b.self)))\n"
+      "Base.show(io::IO, ::MIME\"text/plain\", b::_SwigBound) = show(io, b)\n\n"
       "# further properties: add a method for (::YourProxy, ::Val{:name})\n"
       "_swig_getproperty(x, ::Val{s}) where {s} = getfield(x, s)\n"
       "_swig_upcast(x, base::String) = ccall((:swig_jl_upcast, _lib), Ptr{Cvoid}, (Any, Cstring), x, base)\n\n"
