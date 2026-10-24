@@ -1224,12 +1224,11 @@ public:
       String *call = Swig_cfunction_call(Getattr(n, "name"), parms);
       Setattr(n, "wrap:action", Swig_cresult(returntype, Swig_cresult_name(), call));
     }
-    /* collect argout parms (numinputs=0 + tmap:argout): void-returning functions hand
+    /* collect argout parms (OUTPUT and INOUT): void-returning functions hand
        them back as the Julia return value, others as (result, outputs...) */
     List *argouts = NewList();
     for (Parm *q = parms; q; q = nextSibling(q)) {
-      if (checkAttribute(q, "tmap:in:numinputs", "0") && Getattr(q, "tmap:argout"))
-        Append(argouts, q);
+      if (Getattr(q, "tmap:argout")) Append(argouts, q);
     }
     bool is_void = Strcmp(ret_ct, "void") == 0;
     bool argout_mode = is_void && Len(argouts) > 0;
