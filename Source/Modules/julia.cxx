@@ -1813,7 +1813,8 @@ public:
     String *dispatch = NewStringf("%s_%s", classname, name);
     String *args_build = NewString("");
     int nargs = 0;
-    for (Parm *p = l; p; p = nextSibling(p)) {
+    for (Parm *p = l, *pn = 0; p; p = pn) {
+      pn = nextSibling(p);
       if (checkAttribute(p, "tmap:in:numinputs", "0")) continue;
       String *tm = Getattr(p, "tmap:directorin");
       if (!tm) {
@@ -1824,6 +1825,8 @@ public:
       }
       String *body = Copy(tm);
       Replaceall(body, "$input", NewStringf("__jargs[%d]", nargs + 1));
+      /* a multi-argument typemap covers the parameters up to tmap:directorin:next */
+      pn = Getattr(p, "tmap:directorin:next");
       Replaceall(body, "$1", Getattr(p, "name"));
       Printf(args_build, "    { %s }\n", body);
       ++nargs;
