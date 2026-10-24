@@ -503,7 +503,7 @@ public:
           "        f = getfield(@__MODULE__, s)\n"
           "        return (args...; kw...) -> f(x, args...; kw...)\n"
           "    end\n"
-          "    return getfield(x, s)\n"
+          "    return _swig_getproperty(x, Val(s))\n"
           "end\n",
           cls, cls, propcheck, cls);
         Delete(set); Delete(props); Delete(propcheck);
@@ -636,6 +636,8 @@ public:
       "    if ccall((:swig_jl_last_error_code, _lib), Cint, ()) != 0\n"
       "        throw(SwigError(unsafe_string(ccall((:swig_jl_last_error_msg, _lib), Cstring, ()))))\n"
       "    end\n    v\nend\n\n"
+      "# further properties: add a method for (::YourProxy, ::Val{:name})\n"
+      "_swig_getproperty(x, ::Val{s}) where {s} = getfield(x, s)\n"
       "_swig_upcast(x, base::String) = ccall((:swig_jl_upcast, _lib), Ptr{Cvoid}, (Any, Cstring), x, base)\n\n"
       "function _takestr(p::Ptr{UInt8})\n"
       "    _check(p)\n    s = unsafe_string(p)\n"
