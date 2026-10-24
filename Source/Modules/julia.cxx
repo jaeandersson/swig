@@ -1498,7 +1498,21 @@ public:
     return r;
   }
 
+  /* a const member overloaded by a non-const one with the same parameters is
+     unreachable in C++ through a non-const object; wrap the non-const one only */
+  bool const_shadowed(Node *n) {
+    String *decl = Getattr(n, "decl");
+    if (!decl || strncmp(Char(decl), "q(const).", 9) != 0) return false;
+    String *base = NewString(Char(decl) + 9);
+    bool found = false;
+    for (Node *o = Getattr(n, "sym:overloaded"); o && !found; o = Getattr(o, "sym:nextSibling"))
+      if (o != n && !Equal(Getattr(o, "storage"), "static") && Equal(Getattr(o, "decl"), base)) found = true;
+    Delete(base);
+    return found;
+  }
+
   virtual int memberfunctionHandler(Node *n) {
+    if (const_shadowed(n)) return SWIG_NOWRAP;
     bare_symname = Copy(Getattr(n, "sym:name"));
     int r = Language::memberfunctionHandler(n);
     Delete(bare_symname); bare_symname = 0;
