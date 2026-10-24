@@ -646,6 +646,7 @@ public:
       "    if ccall((:swig_jl_last_error_code, _lib), Cint, ()) != 0\n"
       "        throw(SwigError(unsafe_string(ccall((:swig_jl_last_error_msg, _lib), Cstring, ()))))\n"
       "    end\n    v\nend\n\n"
+      "_swig_upcast(x, base::String) = ccall((:swig_jl_upcast, _lib), Ptr{Cvoid}, (Any, Cstring), x, base)\n\n"
       "function _takestr(p::Ptr{UInt8})\n"
       "    _check(p)\n    s = unsafe_string(p)\n"
       "    ccall((:swig_jl_str_free, _lib), Cvoid, (Ptr{UInt8},), p)\n    s\nend\n\n",
@@ -722,11 +723,18 @@ public:
               Hash *de = NewHash();
               Setattr(de, "fname", Copy(Getattr(src, "fname")));
               Setattr(de, "sig", sig);
-              Setattr(de, "body", Copy(Getattr(src, "body")));
+              /* an opaque `self.ptr` is the derived object's address: cast it to the base */
+              String *upcast = NewStringf("_swig_upcast(self, \"%s\")", Getattr(src, "selftype"));
+              String *dbody = Copy(Getattr(src, "body"));
+              String *djargs = Copy(Getattr(src, "jccall_args"));
+              Replaceall(dbody, "self.ptr", upcast);
+              Replaceall(djargs, "self.ptr", upcast);
+              Delete(upcast);
+              Setattr(de, "body", dbody);
               Setattr(de, "preserve", Copy(Getattr(src, "preserve")));
               Setattr(de, "wname", Copy(Getattr(src, "wname")));
               Setattr(de, "jccall_types", Copy(Getattr(src, "jccall_types")));
-              Setattr(de, "jccall_args", Copy(Getattr(src, "jccall_args")));
+              Setattr(de, "jccall_args", djargs);
               if (Getattr(src, "has_probe")) Setattr(de, "has_probe", "1");
               /* collision key: fname + per-arg TYPES of the rebound signature */
               List *nn = NewList(), *tt = NewList(), *dd = NewList();

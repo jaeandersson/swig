@@ -63,6 +63,14 @@ SWIGRUNTIME int swig_jl_convert_ptr(jl_value_t* p, void** out, swig_type_info* t
   return SWIG_OK;
 }
 #define SWIG_ConvertPtr(obj, pptr, type, flags) swig_jl_convert_ptr(obj, pptr, type)
+/* `this` of a base-class method reached through a derived proxy: apply the cast chain */
+extern "C" SWIGEXPORT void* swig_jl_upcast(jl_value_t* p, const char* base) {
+  void* r = 0;
+  std::map<std::string, swig_type_info*>::iterator it = swig_jl_proxy_registry().find(base);
+  if (it == swig_jl_proxy_registry().end() || swig_jl_convert_ptr(p, &r, it->second) != SWIG_OK)
+    swig_jl_convert_ptr(p, &r, 0);
+  return r;
+}
 /* Returns are wrapped Julia-side (proxy ctor over void*); from_ptr paths
    that build GUESTOBJECT returns box the pointer for the .jl layer. */
 SWIGRUNTIME jl_value_t* swig_jl_new_pointer_obj(void* ptr, swig_type_info* type) {
