@@ -237,6 +237,7 @@ public:
           Setattr(ne, "jccall_types", Copy(Getattr(e, "jccall_types")));
           Setattr(ne, "jccall_args", jargs);
           if (Getattr(e, "has_probe")) Setattr(ne, "has_probe", "1");
+          if (Getattr(e, "rank")) Setattr(ne, "rank", Copy(Getattr(e, "rank")));
           String *key = NewStringf("%s|%s", Getattr(e, "fname"), stypes);
           List *nl = (List *)Getattr(nm, key);
           if (!nl) { nl = NewList(); Setattr(nm, key, nl); Append(norder, Copy(key)); }
@@ -359,6 +360,24 @@ public:
         else
           Printf(jf, "%s(%s) = %s\n", Getattr(e, "fname"), Getattr(e, "sig"), Getattr(e, "body"));
       } else {
+        /* stable insertion sort by rank */
+        {
+          List *sorted = NewList();
+          for (int i = 0; i < Len(lst); ++i) {
+            Hash *e = (Hash *)Getitem(lst, i);
+            String *re = Getattr(e, "rank");
+            int pos = Len(sorted);
+            while (re && pos > 0) {
+              String *rp = Getattr((Hash *)Getitem(sorted, pos - 1), "rank");
+              if (!rp || Strcmp(rp, re) <= 0) break;
+              --pos;
+            }
+            Insert(sorted, pos, e);
+          }
+          Clear(lst);
+          for (int i = 0; i < Len(sorted); ++i) Append(lst, Getitem(sorted, i));
+          Delete(sorted);
+        }
         Hash *e0 = (Hash *)Getitem(lst, 0);
         /* outer signature: per slot, the common type across all entries; a slot
            the entries disagree on is generalised to Any so no two merged
@@ -728,6 +747,7 @@ public:
               Setattr(de, "jccall_types", Copy(Getattr(src, "jccall_types")));
               Setattr(de, "jccall_args", djargs);
               if (Getattr(src, "has_probe")) Setattr(de, "has_probe", "1");
+              if (Getattr(src, "rank")) Setattr(de, "rank", Copy(Getattr(src, "rank")));
               /* collision key: fname + per-arg TYPES of the rebound signature */
               List *nn = NewList(), *tt = NewList(), *dd = NewList();
               split_signature(sig, nn, tt, dd);
@@ -1209,6 +1229,15 @@ public:
         q = Getattr(q, "tmap:in:next") ? Getattr(q, "tmap:in:next") : nextSibling(q);
       }
     }
+    /* typecheck precedences, zero-padded: merged overloads are probed in this
+       order, so a narrower type (DM vector) is tried before a wider one (MX vector) */
+    String *rank = NewString("");
+    for (Parm *q = parms; q; ) {
+      if (checkAttribute(q, "tmap:in:numinputs", "0")) { q = Getattr(q, "tmap:in:next"); continue; }
+      String *pr = Getattr(q, "tmap:typecheck:precedence");
+      Printf(rank, "%08d.", pr ? atoi(Char(pr)) : 99999999);
+      q = Getattr(q, "tmap:in:next") ? Getattr(q, "tmap:in:next") : nextSibling(q);
+    }
     bool has_probe = Len(probe_body) > 0;
     if (has_probe) {
       Printf(f_wrappers, "extern \"C\" SWIGEXPORT int _swig_can_%s(%s) {\n  SWIG_JL_ENTER();\n  try {\n%s  return 1;\n  } SWIG_JL_CATCH(0)\n}\n\n",
@@ -1389,6 +1418,7 @@ public:
       Setattr(e, "jccall_types", Copy(jccall_types));
       Setattr(e, "jccall_args", Copy(jccall_args));
       if (has_probe) Setattr(e, "has_probe", "1");
+      Setattr(e, "rank", rank);
       Append(lst, e);
       Delete(key);
     }
@@ -1410,6 +1440,7 @@ public:
         Setattr(me, "jccall_types", Copy(jccall_types));
         Setattr(me, "jccall_args", Copy(jccall_args));
         if (has_probe) Setattr(me, "has_probe", "1");
+        Setattr(me, "rank", Copy(rank));
         Setattr(me, "selftype", Copy(class_jlname));
         if (!class_members) class_members = NewHash();
         List *lst = (List *)Getattr(class_members, class_jlname);
