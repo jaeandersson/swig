@@ -889,6 +889,7 @@ public:
           if (Getattr(seen, b)) continue;
           Setattr(seen, b, "1");
           List *ml = class_members ? (List *)Getattr(class_members, b) : 0;
+          Hash *bkeys = NewHash();   /* this base's signatures hide those of farther bases */
           if (ml) {
             for (int mi = 0; mi < Len(ml); ++mi) {
               Hash *src = (Hash *)Getitem(ml, mi);
@@ -915,7 +916,8 @@ public:
               String *st = NewString("");
               for (int z = 0; z < Len(tt); ++z) Printf(st, "%s,", (String *)Getitem(tt, z));
               String *key = NewStringf("%s|%s", Getattr(src, "fname"), st);
-              if (Getattr(ownkeys, key)) {   /* derived overrides it; keep its own */
+              Setattr(bkeys, key, "1");
+              if (Getattr(ownkeys, key)) {   /* derived or a nearer base overrides it */
                 Delete(de);
                 Delete(nn); Delete(tt); Delete(dd); Delete(st); Delete(key);
                 continue;
@@ -926,6 +928,8 @@ public:
               Delete(nn); Delete(tt); Delete(dd); Delete(st); Delete(key);
             }
           }
+          for (Iterator ki = First(bkeys); ki.key; ki = Next(ki)) Setattr(ownkeys, ki.key, "1");
+          Delete(bkeys);
           Hash *set = class_statics ? (Hash *)Getattr(class_statics, b) : 0;
           if (set) {
             Iterator si = First(set);
