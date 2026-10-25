@@ -80,10 +80,8 @@
 %typemap(directorin)  std::string, const std::string& %{ $input = jl_cstr_to_string(std::string($1).c_str()); %}
 %typemap(directorin)  char *, const char * %{ $input = jl_cstr_to_string($1 ? $1 : ""); %}
 
-%typemap(directorout) bool        %{ $result = jl_unbox_bool($input) != 0; %}
-%typemap(directorout) int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, casadi_int
-                                   %{ $result = ($1_ltype)jl_unbox_int64($input); %}
-%typemap(directorout) double, float %{ $result = ($1_ltype)jl_unbox_float64($input); %}
+%typemap(directorout) bool, int, long, long long, short, size_t, unsigned int, unsigned long, unsigned short, casadi_int, double, float
+                                   %{ $result = Swig::swig_director_as< $1_ltype >($input); %}
 %typemap(directorout) std::string %{ $result = std::string(jl_string_ptr($input), jl_string_len($input)); %}
 
 /* ---- enums: marshalled as their underlying integer (long long) ---- */

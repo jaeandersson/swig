@@ -1853,7 +1853,12 @@ public:
         Printf(ret_marshal, "      %s;\n", cres);
         Replaceall(tm, "$input", "__r");
         Replaceall(tm, "$result", "c_result");
-        Printf(ret_marshal, "      { %s }\n", tm);
+        /* a return that does not convert: pop the GC frame, name the override */
+        Printf(ret_marshal, "      try { %s }\n", tm);
+        Printf(ret_marshal, "      catch (const std::exception &__e) {\n"
+               "        JL_GC_POP();\n"
+               "        throw std::runtime_error(std::string(\"Julia director %s returned an invalid value: \") + __e.what());\n"
+               "      }\n", dispatch);
         Delete(cres); Delete(tm);
       }
     }

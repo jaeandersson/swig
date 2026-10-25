@@ -17,6 +17,8 @@
 #include <julia.h>
 #include <stdexcept>
 #include <string>
+#include <limits>
+#include <stdint.h>
 
 /* Recover the Swig::Director base from a director-managed object pointer. */
 #define SWIG_DIRECTOR_CAST(ARG) dynamic_cast<Swig::Director *>(ARG)
@@ -67,6 +69,34 @@ namespace Swig {
     if (msg.empty()) msg = jl_typeof_str(e);  /* fallback: exception type name */
     JL_GC_POP();
     return msg;
+  }
+
+  /* A primitive returned by a Julia override, converted with Base.convert:
+     lossless values of any Julia number type are taken, anything else throws. */
+  inline jl_value_t *swig_director_convert(jl_datatype_t *t, jl_value_t *x) {
+    jl_value_t *r = jl_call2(jl_get_function(jl_base_module, "convert"), (jl_value_t *)t, x);
+    if (!r) throw std::runtime_error(swig_director_exception_msg());
+    return r;
+  }
+  template <typename T> T swig_director_as(jl_value_t *x) {
+    if (!std::numeric_limits<T>::is_signed) {
+      uint64_t u = jl_unbox_uint64(swig_director_convert(jl_uint64_type, x));
+      if (u > (uint64_t)std::numeric_limits<T>::max()) throw std::runtime_error("InexactError: value out of range of the C++ return type");
+      return (T)u;
+    }
+    int64_t i = jl_unbox_int64(swig_director_convert(jl_int64_type, x));
+    if (i < (int64_t)std::numeric_limits<T>::min() || i > (int64_t)std::numeric_limits<T>::max())
+      throw std::runtime_error("InexactError: value out of range of the C++ return type");
+    return (T)i;
+  }
+  template <> inline bool swig_director_as<bool>(jl_value_t *x) {
+    return jl_unbox_bool(swig_director_convert(jl_bool_type, x)) != 0;
+  }
+  template <> inline double swig_director_as<double>(jl_value_t *x) {
+    return jl_unbox_float64(swig_director_convert(jl_float64_type, x));
+  }
+  template <> inline float swig_director_as<float>(jl_value_t *x) {
+    return (float)swig_director_as<double>(x);
   }
 
   /* Base for every SwigDirector_<C>: holds + GC-roots the Julia self object. */
