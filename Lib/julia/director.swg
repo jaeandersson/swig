@@ -7,9 +7,9 @@
  * args...)`, and marshals the Julia return back (directorout).
  *
  * The wrapper compiles against julia.h but does NOT link libjulia; jl_*
- * symbols resolve from the host at dlopen.  The Julia self object is rooted
- * for the director's lifetime via Main._swig_director_roots (an IdDict) so
- * the GC cannot reclaim it while C++ holds the pointer. */
+ * symbols resolve from the host at dlopen.  The director only borrows a
+ * Ref{Any} holding the Julia self object: the Julia proxy owns it (field
+ * _swig_refs) and deletes the director when it is finalized. */
 
 #ifndef SWIG_DIRECTOR_JULIA_HEADER_
 #define SWIG_DIRECTOR_JULIA_HEADER_
@@ -41,13 +41,6 @@ namespace Swig {
   inline jl_value_t *swig_director_global(const char *name) {
     jl_module_t *m = swig_jl_director_module ? swig_jl_director_module : jl_main_module;
     return jl_get_global(m, jl_symbol(name));
-  }
-
-  /* The roots IdDict is defined Julia-side (const _swig_director_roots) in the
-     director module; the GC keeps it (and its entries) reachable from there. */
-  inline jl_value_t *swig_director_roots() {
-    jl_module_t *m = swig_jl_director_module ? swig_jl_director_module : jl_main_module;
-    return jl_get_global(m, jl_symbol("_swig_director_roots"));
   }
 
   /* Render the pending Julia exception (from a failed upcall) as a string, so
@@ -99,28 +92,15 @@ namespace Swig {
     return (float)swig_director_as<double>(x);
   }
 
-  /* Base for every SwigDirector_<C>: holds + GC-roots the Julia self object. */
+  /* Base for every SwigDirector_<C>: borrows a Ref{Any} holding the Julia self
+     object; the proxy owns the Ref, so self keeps its identity and stays alive. */
   class Director {
   protected:
-    jl_value_t *swig_self;
+    jl_value_t *swig_holder;
   public:
-    Director(jl_value_t *self) : swig_self(self) {
-      if (swig_self) {
-        jl_value_t *d = swig_director_roots();
-        JL_GC_PUSH1(&d);
-        jl_call3(jl_get_function(jl_base_module, "setindex!"), d, jl_box_int64(1), swig_self);
-        JL_GC_POP();
-      }
-    }
-    virtual ~Director() {
-      if (swig_self) {
-        jl_value_t *d = swig_director_roots();
-        JL_GC_PUSH1(&d);
-        jl_call2(jl_get_function(jl_base_module, "delete!"), d, swig_self);
-        JL_GC_POP();
-      }
-    }
-    jl_value_t *swig_get_self() const { return swig_self; }
+    Director(jl_value_t *holder) : swig_holder(holder) { }
+    virtual ~Director() { }
+    jl_value_t *swig_get_self() const { return swig_holder ? jl_get_nth_field(swig_holder, 0) : 0; }
     void swig_disown() { }  /* ownership stays with the Julia proxy finalizer */
   };
 

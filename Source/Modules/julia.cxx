@@ -49,13 +49,15 @@ class JULIA : public Language {
   List   *jl_doc_order;
   bool    in_ctor, in_static;
   bool    class_has_copyctor;  /* a copy ctor was wrapped for the current class */
+  bool    class_has_refs;      /* the current proxy owns Julia objects its C++ object borrows */
+  Hash   *refs_classes;        /* proxies with a _swig_refs field */
   int     n_skipped;
 
 public:
   JULIA() : f_begin(0), f_runtime(0), f_header(0), f_wrappers(0), f_init(0),
             f_jl_types(0), f_jl_body(0), f_jl_exports(0), f_directors(0), f_directors_h(0), module_name(0),
             f_type_init(0), f_proxy_pairs(0), jl_methods(0), jl_method_order(0), class_statics(0), class_members(0), class_methods(0), class_bases(0), class_jlname(0),
-            bare_symname(0), memberget_field(0), enum_seen(0), director_classes(0), jl_docs(0), jl_doc_order(0), in_ctor(false), in_static(false), class_has_copyctor(false), n_skipped(0) {}
+            bare_symname(0), memberget_field(0), enum_seen(0), director_classes(0), jl_docs(0), jl_doc_order(0), in_ctor(false), in_static(false), class_has_copyctor(false), class_has_refs(false), refs_classes(0), n_skipped(0) {}
 
   virtual void main(int argc, char *argv[]) {
     (void)argc; (void)argv;
@@ -670,8 +672,7 @@ public:
       "    ccall((:swig_jl_str_free, _lib), Cvoid, (Ptr{UInt8},), p)\n    s\nend\n\n",
       module_name);
     if (Swig_directors_enabled())
-      Printf(jf, "struct _SwigNoOverride end\nconst _swig_director_no_override = _SwigNoOverride()\n"
-                 "const _swig_director_roots = Base.IdDict{Any,Any}()\n\n");
+      Printf(jf, "struct _SwigNoOverride end\nconst _swig_director_no_override = _SwigNoOverride()\n\n");
     Dump(f_jl_types, jf);
     Printf(jf, "\nconst _proxy_types = [\n%s]\n\n", f_proxy_pairs);
     Dump(f_jl_body, jf);
@@ -1404,6 +1405,24 @@ public:
       Delete(body); body = b2;
     }
 
+    /* %feature("julia:keep"): the C++ object borrows the other arguments; the
+       receiver proxy keeps them (or nothing, for an overload without any) */
+    if (GetFlag(n, "feature:julia:keep") && class_jlname && !in_ctor && !in_static) {
+      String *kept = NewString("");
+      int nk = 0;
+      List *kn = NewList(), *kt = NewList(), *kd = NewList();
+      split_signature(jargs, kn, kt, kd);
+      for (int i = 1; i < Len(kn); ++i) {
+        Printf(kept, "%s%s", nk ? ", " : "", (String *)Getitem(kn, i));
+        ++nk;
+      }
+      Delete(kn); Delete(kt); Delete(kd);
+      String *kv = nk == 0 ? NewString("nothing") : nk == 1 ? Copy(kept) : NewStringf("(%s,)", kept);
+      String *b2 = NewStringf("(_swigjl_r = %s; setfield!(self, :_swig_refs, %s); _swigjl_r)", body, kv);
+      Delete(body); body = b2;
+      Delete(kept); Delete(kv);
+      class_has_refs = true;
+    }
     if (memberget_field && Getattr(n, "memberget")) {
       if (Len(preserve) > 0)
         Printf(f_jl_body, "_swig_getproperty(self::%s, ::Val{:%s}) = GC.@preserve %sbegin %s end\n",
@@ -1524,13 +1543,7 @@ public:
     String *cname = Getattr(n, "name");
     class_has_copyctor = false;
 
-    Printf(f_jl_types,
-      "mutable struct %s\n    ptr::Ptr{Cvoid}\n"
-      "    function %s(p::Ptr{Cvoid})\n"
-      "        x = new(p)\n"
-      "        finalizer(o -> (ccall((:_swig_%s_delete, _lib), Cvoid, (Ptr{Cvoid},), o.ptr); o.ptr = C_NULL), x)\n"
-      "        x\n    end\nend\n",
-      class_jlname, class_jlname, class_jlname);
+    class_has_refs = false;
     add_export(class_jlname);
 
     String *cxxname = SwigType_namestr(cname);
@@ -1563,6 +1576,26 @@ public:
       }
     }
     Language::classHandler(n);
+    /* _swig_refs: Julia objects the C++ object borrows (a director's self,
+       %feature("julia:keep") arguments); inherited by derived proxies */
+    {
+      if (refs_classes && Getattr(refs_classes, class_jlname)) class_has_refs = true;
+      List *bl = class_bases ? (List *)Getattr(class_bases, class_jlname) : 0;
+      if (bl) for (int bi = 0; bi < Len(bl); ++bi)
+        if (refs_classes && Getattr(refs_classes, Getitem(bl, bi))) class_has_refs = true;
+      if (class_has_refs) {
+        if (!refs_classes) refs_classes = NewHash();
+        Setattr(refs_classes, class_jlname, "1");
+      }
+    }
+    Printf(f_jl_types,
+      "mutable struct %s\n    ptr::Ptr{Cvoid}\n%s"
+      "    function %s(p::Ptr{Cvoid})\n"
+      "        x = new(p%s)\n"
+      "        finalizer(o -> (ccall((:_swig_%s_delete, _lib), Cvoid, (Ptr{Cvoid},), o.ptr); o.ptr = C_NULL), x)\n"
+      "        x\n    end\nend\n",
+      class_jlname, class_has_refs ? "    _swig_refs::Any\n" : "", class_jlname,
+      class_has_refs ? ", nothing" : "", class_jlname);
     /* copy-constructible proxy: give Julia an independent copy/deepcopy
        (proxies otherwise alias one C++ object). */
     if (class_has_copyctor) {
@@ -1736,10 +1769,16 @@ public:
       "extern \"C\" SWIGEXPORT void* _swig_new_SwigDirector_%s(jl_value_t *self) {\n"
       "  SWIG_JL_ENTER();\n  try { return static_cast<void*>(new SwigDirector_%s(self)); }\n"
       "  SWIG_JL_CATCH(0)\n}\n\n", supername, supername);
-    /* construct a proxy from the director pointer (self rooted by Swig::Director) */
+    /* the proxy owns a Ref holding self; the director borrows that Ref */
     Printf(f_jl_body,
-      "%s(self) = %s(ccall((:_swig_new_SwigDirector_%s, _lib), Ptr{Cvoid}, (Any,), self))\n",
+      "function %s(self)\n"
+      "    r = Base.RefValue{Any}(self)\n"
+      "    x = %s(ccall((:_swig_new_SwigDirector_%s, _lib), Ptr{Cvoid}, (Any,), r))\n"
+      "    setfield!(x, :_swig_refs, r)\n"
+      "    x\nend\n",
       supername, supername, supername);
+    if (!refs_classes) refs_classes = NewHash();
+    Setattr(refs_classes, supername, "1");  /* director classes are declared before classHandler */
     (void)cxxname;
   }
 
