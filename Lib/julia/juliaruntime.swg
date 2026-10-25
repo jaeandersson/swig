@@ -18,6 +18,7 @@
    adjustment); unknown names with a non-null expected type are rejected. */
 #include <map>
 #include <string>
+#include <stdexcept>
 SWIGRUNTIME std::map<std::string, swig_type_info*>& swig_jl_proxy_registry() {
   static std::map<std::string, swig_type_info*> reg;
   return reg;
