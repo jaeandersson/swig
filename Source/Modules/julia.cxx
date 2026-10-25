@@ -1597,7 +1597,13 @@ public:
     Printf(f_wrappers, "extern \"C\" SWIGEXPORT %s %s(%s) {\n  SWIG_JL_ENTER();\n  try {\n",
            ret_ct, wname, Len(csig) ? Char(csig) : "void");
     Printv(f_wrappers, w->locals, NIL);
-    if (!is_void) Printf(f_wrappers, "  %s _outv%s;\n", ret_ct, argout_mode ? " = 0" : "");
+    /* later output conversions allocate: keep the partial result rooted */
+    String *ret_ct_ns = Copy(ret_ct);
+    Replaceall(ret_ct_ns, " ", "");
+    bool root_outv = Len(argouts) > 0 && Strcmp(ret_ct_ns, "jl_value_t*") == 0;
+    Delete(ret_ct_ns);
+    if (root_outv) Printf(f_wrappers, "  jl_value_t* _outv = 0;\n  JL_GC_PUSH1(&_outv);\n  SwigJlGcPop _outv_pop;\n");
+    else if (!is_void) Printf(f_wrappers, "  %s _outv%s;\n", ret_ct, argout_mode ? " = 0" : "");
     Printv(f_wrappers, w->code, NIL);
     if (is_void) {
       Printv(f_wrappers, actioncode, NIL);

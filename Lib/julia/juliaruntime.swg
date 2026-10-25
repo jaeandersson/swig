@@ -128,22 +128,22 @@ template <typename T> SWIGRUNTIME int swig_jl_check_int(jl_value_t* x) {
 #define SWIG_fail                      throw std::runtime_error("SWIG conversion failed")
 %}
 %insert(runtime) %{
+/* pops the JL_GC_PUSH frame of its scope on every exit, C++ exceptions included */
+struct SwigJlGcPop { ~SwigJlGcPop() { JL_GC_POP(); } };
 /* %append_output target: first output returned bare; further outputs grow a tuple. */
 SWIGRUNTIME jl_value_t* SWIG_AppendOutput(jl_value_t* cur, jl_value_t* x) {
   if (!cur) return x;
-  JL_GC_PUSH2(&cur, &x);
-  jl_value_t* tuple_f = jl_get_function(jl_core_module, "tuple");
-  jl_value_t* r;
+  size_t n = jl_is_tuple(cur) ? jl_nfields(cur) : 1;
+  jl_value_t** vals;
+  JL_GC_PUSHARGS(vals, n + 2);
+  vals[n] = x;
+  vals[n + 1] = cur;
   if (jl_is_tuple(cur)) {
-    size_t n = jl_nfields(cur);
-    jl_value_t** vals = (jl_value_t**)alloca(sizeof(jl_value_t*) * (n + 1));
     for (size_t i = 0; i < n; ++i) vals[i] = jl_fieldref(cur, i);
-    vals[n] = x;
-    r = jl_call(tuple_f, vals, (int)(n + 1));
   } else {
-    jl_value_t* vals[2] = { cur, x };
-    r = jl_call(tuple_f, vals, 2);
+    vals[0] = cur;
   }
+  jl_value_t* r = jl_call(jl_get_function(jl_core_module, "tuple"), vals, (int)(n + 1));
   JL_GC_POP();
   return r;
 }
