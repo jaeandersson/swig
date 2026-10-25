@@ -678,6 +678,38 @@ public:
       "    _check(p)\n    s = unsafe_string(p)\n"
       "    ccall((:swig_jl_str_free, _lib), Cvoid, (Ptr{UInt8},), p)\n    s\nend\n\n",
       module_name);
+    Printf(jf, "%s",
+      "# Overloads whose argument unions overlap are ambiguous there: the overlap calls the\n"
+      "# overload fitting more arguments more tightly, else the one declared first.\n"
+      "function _swig_disambiguate(mod::Module)\n"
+      "    for _ in 1:3\n"
+      "        added = false\n"
+      "        for n in Base.names(mod; all = true)\n"
+      "            Base.isdefined(mod, n) || continue\n"
+      "            f = Base.getfield(mod, n)\n"
+      "            f isa Base.Function && Base.parentmodule(f) === mod || continue\n"
+      "            ms = Base.sort!(Base.collect(Base.methods(f, mod)), by = m -> m.line)\n"
+      "            for i in Base.eachindex(ms), j in (i + 1):Base.length(ms)\n"
+      "                m1, m2 = ms[i], ms[j]\n"
+      "                m1.sig isa DataType && m2.sig isa DataType && Base.isambiguous(m1, m2) || continue\n"
+      "                s = Base.typeintersect(m1.sig, m2.sig)\n"
+      "                s isa DataType || continue\n"
+      "                ts = Base.collect(s.parameters)[2:end]\n"
+      "                Base.any(t -> t isa Core.TypeofVararg, ts) && continue\n"
+      "                p1, p2 = m1.sig.parameters, m2.sig.parameters\n"
+      "                score = Base.length(p1) == Base.length(p2) ?\n"
+      "                    Base.sum(Base.Int(p1[k] <: p2[k]) - Base.Int(p2[k] <: p1[k]) for k in 2:Base.length(p1); init = 0) : 0\n"
+      "                w = score < 0 ? m2 : m1\n"
+      "                a = [Base.Symbol(:x, k) for k in Base.eachindex(ts)]\n"
+      "                Core.eval(mod, :((::$(Base.typeof(f)))($([:($(a[k])::$(ts[k])) for k in Base.eachindex(ts)]...)) =\n"
+      "                    Base.invoke($f, $(Tuple{Base.collect(w.sig.parameters)[2:end]...}), $(a...))))\n"
+      "                added = true\n"
+      "            end\n"
+      "        end\n"
+      "        added || break\n"
+      "    end\n"
+      "end\n"
+      "\n");
     if (Swig_directors_enabled())
       Printf(jf, "struct _SwigNoOverride end\nconst _swig_director_no_override = _SwigNoOverride()\n\n");
     Dump(f_jl_types, jf);
@@ -810,6 +842,7 @@ public:
     emit_method_style_getproperty(jf);
     emit_static_method_style_getproperty(jf);
     emit_docs(jf);
+    Printf(jf, "_swig_disambiguate(@__MODULE__)\n");
     if (Len(f_jl_exports) > 0) Printf(jf, "export %s\n", f_jl_exports);
     Printf(jf, "\nend # module %s\n", module_name);
     Delete(jf);
