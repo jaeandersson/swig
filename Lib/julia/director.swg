@@ -3,8 +3,9 @@
  * Inserted verbatim into the generated wrapper's runtime so SwigDirector_<C>
  * classes compile.  A SwigDirector_<C> holds a jl_value_t* to the Julia
  * object the user subclassed with; each overridden virtual marshals C++ args
- * to Julia (directorin), invokes the module generic `<C>_<method>(self,
- * args...)`, and marshals the Julia return back (directorout).
+ * to Julia (directorin), invokes the module function `<method>(self, args...)`
+ * on a subtype of the class's abstract director type, and marshals the Julia return back
+ * (directorout).
  *
  * The wrapper compiles against julia.h but does NOT link libjulia; jl_*
  * symbols resolve from the host at dlopen.  The director only borrows a

@@ -73,6 +73,13 @@ public:
     none_comparison = NewString("0");
   }
 
+  /* eval/include are auto-bound in every Julia module and cannot be
+     redefined or extended: such method names get a trailing underscore */
+  static String *jl_method_name(String *name) {
+    if (Strcmp(name, "eval") == 0 || Strcmp(name, "include") == 0) return NewStringf("%s_", name);
+    return Copy(name);
+  }
+
   /* proxy name for a (possibly ref/ptr) class type, or 0 if not wrapped */
   String *proxy_name(SwigType *t) {
     SwigType *r = SwigType_typedef_resolve_all(t);
@@ -869,6 +876,7 @@ public:
   }
 
   void add_export(const String *name) {
+    if (Char(name)[0] == '_') return;  /* a leading underscore marks an internal name */
     String *probe = NewStringf("|%s|", name);
     String *hay = NewStringf("|%s|", f_jl_exports);
     Replaceall(hay, ", ", "|");
@@ -1437,12 +1445,7 @@ public:
     }
     String *fname = in_ctor ? Copy(class_jlname)
                   : bare_symname ? Copy(bare_symname) : Copy(symname);
-    /* eval/include are auto-bound in every Julia module and cannot be
-       redefined or extended; suffix such method names to avoid the clash. */
-    if (!in_ctor && (Strcmp(fname, "eval") == 0 || Strcmp(fname, "include") == 0)) {
-      String *safe = NewStringf("%s_", fname);
-      Delete(fname); fname = safe;
-    }
+    if (!in_ctor) { String *safe = jl_method_name(fname); Delete(fname); fname = safe; }
     String *sig = NewString("");
     if (in_static) Printf(sig, "::Type{%s}%s", class_jlname, Len(jargs) ? ", " : "");
     Printv(sig, jargs, NIL);
@@ -1742,13 +1745,23 @@ public:
    *
    * Each director-marked class C gets a C++ `SwigDirector_C : public C,
    * public Swig::Director`.  Its overridden virtuals marshal C++ args to
-   * Julia (directorin), call the module generic function `C_<method>(self,
+   * Julia (directorin), call the method's own module function `<method>(self,
    * args...)`, and marshal the Julia return back (directorout).  The Julia
-   * side: a user defines a struct + `C_<method>(self::MySub, args...) = ...`
-   * and constructs `C(self)` -- the ctor wrapper builds a SwigDirector_C
-   * holding `self`.  Non-overridden methods fall through to the C++ base. */
+   * side: a user defines `struct MySub <: CDirector` + `<method>(self::MySub,
+   * args...) = ...` and constructs `C(self)` -- the proxy owns `self`, the
+   * SwigDirector_C borrows it.  Non-overridden methods fall through to the C++ base.
+   * %feature("julia:director", "Name") names the abstract supertype (default CDirector). */
+
+  static String *director_type(Node *cls) {
+    String *t = Getattr(cls, "feature:julia:director");
+    return t && Len(t) > 0 ? Copy(t) : NewStringf("%sDirector", Getattr(cls, "sym:name"));
+  }
 
   virtual int classDirectorInit(Node *n) {
+    /* Julia types implementing the director subtype this abstract type */
+    String *dt = director_type(n);
+    Printf(f_jl_types, "abstract type %s end\n", dt);
+    add_export(dt);
     String *declaration = Swig_director_declaration(n);
     Printf(f_directors_h, "\n%s\npublic:\n", declaration);
     Delete(declaration);
@@ -1762,24 +1775,25 @@ public:
 
   /* Emit the dedicated director-construction C wrapper + Julia entry for a
      class C: _swig_new_SwigDirector_C(jl_self) -> void*; Julia C(self) builds
-     a SwigDirector_C rooting self.  The leading jl_value_t* self is defaulted
+     a SwigDirector_C borrowing self.  The leading jl_value_t* self is defaulted
      so the (dead) auto-generated `new SwigDirector_C()` branch also compiles. */
-  void emit_director_construct(String *supername, String *cxxname) {
+  void emit_director_construct(String *supername, Node *cls) {
+    String *dt = director_type(cls);
     Printf(f_wrappers,
       "extern \"C\" SWIGEXPORT void* _swig_new_SwigDirector_%s(jl_value_t *self) {\n"
       "  SWIG_JL_ENTER();\n  try { return static_cast<void*>(new SwigDirector_%s(self)); }\n"
       "  SWIG_JL_CATCH(0)\n}\n\n", supername, supername);
     /* the proxy owns a Ref holding self; the director borrows that Ref */
     Printf(f_jl_body,
-      "function %s(self)\n"
+      "function %s(self::%s)\n"
       "    r = Base.RefValue{Any}(self)\n"
       "    x = %s(ccall((:_swig_new_SwigDirector_%s, _lib), Ptr{Cvoid}, (Any,), r))\n"
       "    setfield!(x, :_swig_refs, r)\n"
       "    x\nend\n",
-      supername, supername, supername);
+      supername, dt, supername, supername);
     if (!refs_classes) refs_classes = NewHash();
     Setattr(refs_classes, supername, "1");  /* director classes are declared before classHandler */
-    (void)cxxname;
+    Delete(dt);
   }
 
   /* ctor: prepend `jl_value_t* jl_self=0` to the user ctor parms; base-init the
@@ -1809,7 +1823,7 @@ public:
       Printf(f_directors_h, "    %s;\n", hdr);
       Delete(hdr);
       if (ParmList_len(superparms) == 0)
-        emit_director_construct(supername, Getattr(parent, "name"));
+        emit_director_construct(supername, parent);
     }
     Delete(classname); Delete(supername); Delete(self_type); Delete(parms);
     return Language::classDirectorConstructor(n);
@@ -1823,7 +1837,7 @@ public:
     Wrapper_print(w, f_directors);
     DelWrapper(w);
     Printf(f_directors_h, "    SwigDirector_%s(jl_value_t *jl_self = 0);\n", classname);
-    emit_director_construct(classname, Getattr(n, "name"));
+    emit_director_construct(classname, n);
     Delete(classname);
     return Language::classDirectorDefaultConstructor(n);
   }
@@ -1854,8 +1868,10 @@ public:
     Wrapper *w = NewWrapper();
     Printf(w->def, "%s {\n", impl_sig);
 
-    /* the module dispatch function for this virtual; a per-arg jl_value_t[] */
-    String *dispatch = NewStringf("%s_%s", classname, name);
+    /* upcall: the method's own Julia name on self, as the wrapper names it */
+    String *dispatch = jl_method_name(Getattr(n, "sym:name"));
+    String *dtype = director_type(parent);
+    String *where = NewStringf("%s.%s", dtype, dispatch);
     String *args_build = NewString("");
     int nargs = 0;
     for (Parm *p = l, *pn = 0; p; p = pn) {
@@ -1897,7 +1913,7 @@ public:
         Printf(ret_marshal, "      catch (const std::exception &__e) {\n"
                "        JL_GC_POP();\n"
                "        throw std::runtime_error(std::string(\"Julia director %s returned an invalid value: \") + __e.what());\n"
-               "      }\n", dispatch);
+               "      }\n", where);
         Delete(cres); Delete(tm);
       }
     }
@@ -1923,7 +1939,7 @@ public:
         "      std::string __em = Swig::swig_director_exception_msg();\n"
         "      JL_GC_POP();\n"
         "      throw std::runtime_error(\"Julia director %s threw: \" + __em);\n"
-        "    }\n", dispatch);
+        "    }\n", where);
       /* a non-overridden method returns the no-override sentinel -> fall to base */
       Printf(w->code,
         "    if (__r != Swig::swig_director_global(\"_swig_director_no_override\")) {\n");
@@ -1956,20 +1972,18 @@ public:
       Wrapper_print(w, f_directors);
       if (!director_classes) director_classes = NewHash();
       Setattr(director_classes, c_classname, "1");
-      /* module-level fallback dispatch method: returns the no-override sentinel
-         unless the user adds a more-specific method for their subtype.  One per
-         dispatch name (overloads/defaultargs share it). */
+      /* not overridden: the no-override sentinel sends the call to the C++
+         base.  One per class and name (overloads/defaultargs share it). */
       if (!enum_seen) enum_seen = NewHash();  /* reuse dedup hash for dispatch names */
-      String *dkey = NewStringf("__disp_%s", dispatch);
+      String *dkey = NewStringf("__disp_%s", where);
       if (!Getattr(enum_seen, dkey)) {
         Setattr(enum_seen, dkey, "1");
-        Printf(f_jl_body, "%s(self, args...) = _swig_director_no_override\n", dispatch);
-        add_export(dispatch);
+        Printf(f_jl_body, "%s(self::%s, args...) = _swig_director_no_override\n", dispatch, dtype);
       }
       Delete(dkey);
     }
 
-    Delete(args_build); Delete(ret_marshal); Delete(dispatch);
+    Delete(args_build); Delete(ret_marshal); Delete(dispatch); Delete(where); Delete(dtype);
     Delete(impl_sig); Delete(hdr_sig); Delete(qualname); Delete(pclassname);
     DelWrapper(w);
     return SWIG_OK;
