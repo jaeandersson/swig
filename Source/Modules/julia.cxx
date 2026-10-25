@@ -4,7 +4,8 @@
  * Julia language module for SWIG.  Emits a flat extern-"C" C++ wrapper
  * (consumed via ccall) plus a Julia module source file (<module>.jl) with
  * proxy types, finalizers and typed methods.  Overloads map onto Julia's
- * multiple dispatch; no arity/probe dispatchers are generated.
+ * multiple dispatch; overloads sharing a Julia signature are resolved by a
+ * generated C dispatcher running their typecheck typemaps in SWIG's order.
  *
  * Conversions are typemap-driven (Lib/julia/julia.swg): standard names
  * (ctype/in/out/freearg) shape the extern-"C" boundary; julia-prefixed
@@ -34,7 +35,7 @@ class JULIA : public Language {
   String *module_name;
   String *f_type_init;    /* body of _swig_jl_init_types() */
   String *f_proxy_pairs;  /* ("Name", Name), entries for _proxy_types */
-  Hash   *jl_methods;     /* "fname|sig-types" -> List of Hash{sig,body,probe,argnames} */
+  Hash   *jl_methods;     /* "fname|sig-types" -> List of Hash{fname,sig,body,node,...} */
   List   *jl_method_order;
   Hash   *class_statics;  /* class jlname -> Hash of static fnames */
   Hash   *class_members;  /* class jlname -> List of method-line templates (@SELF@) */
@@ -51,13 +52,18 @@ class JULIA : public Language {
   bool    class_has_copyctor;  /* a copy ctor was wrapped for the current class */
   bool    class_has_refs;      /* the current proxy owns Julia objects its C++ object borrows */
   Hash   *refs_classes;        /* proxies with a _swig_refs field */
+  Hash   *overload_rank;       /* wrap:name -> position in Swig_overload_rank of its set */
+  Hash   *jl_protos;           /* overload set -> name of its prototypes constant */
+  String *f_jl_protos;         /* those constants */
+  String *f_dispatch;          /* C dispatchers of merged overloads */
+  int     n_dispatch;
   int     n_skipped;
 
 public:
   JULIA() : f_begin(0), f_runtime(0), f_header(0), f_wrappers(0), f_init(0),
             f_jl_types(0), f_jl_body(0), f_jl_exports(0), f_directors(0), f_directors_h(0), module_name(0),
             f_type_init(0), f_proxy_pairs(0), jl_methods(0), jl_method_order(0), class_statics(0), class_members(0), class_methods(0), class_bases(0), class_jlname(0),
-            bare_symname(0), memberget_field(0), enum_seen(0), director_classes(0), jl_docs(0), jl_doc_order(0), in_ctor(false), in_static(false), class_has_copyctor(false), class_has_refs(false), refs_classes(0), n_skipped(0) {}
+            bare_symname(0), memberget_field(0), enum_seen(0), director_classes(0), jl_docs(0), jl_doc_order(0), in_ctor(false), in_static(false), class_has_copyctor(false), class_has_refs(false), refs_classes(0), overload_rank(0), jl_protos(0), f_jl_protos(0), f_dispatch(0), n_dispatch(0), n_skipped(0) {}
 
   virtual void main(int argc, char *argv[]) {
     (void)argc; (void)argv;
@@ -226,15 +232,13 @@ public:
             Printf(sig, "%s::%s", (String *)Getitem(names, i), (String *)Getitem(types, i));
             Printf(stypes, "%s,", (String *)Getitem(types, i));
           }
-          /* body/preserve/jccall_args: splice dropped trailing params back as
+          /* body/preserve: splice dropped trailing params back as
              their default literals so the C wrapper still gets all arguments. */
           String *body = Copy(Getattr(e, "body"));
           String *pres = Copy(Getattr(e, "preserve"));
-          String *jargs = Copy(Getattr(e, "jccall_args"));
           for (int i = a; i < total; ++i) {
             String *pn = (String *)Getitem(names, i), *dv = (String *)Getitem(defs, i);
             rename_ident(body, pn, dv);
-            rename_ident(jargs, pn, dv);
             /* a dropped param can't still be GC-preserved (it has no binding) */
             String *pp = NewStringf("%s ", pn); Replaceall(pres, pp, ""); Delete(pp);
           }
@@ -243,11 +247,9 @@ public:
           Setattr(ne, "sig", sig);
           Setattr(ne, "body", body);
           Setattr(ne, "preserve", pres);
-          Setattr(ne, "wname", Copy(Getattr(e, "wname")));
-          Setattr(ne, "jccall_types", Copy(Getattr(e, "jccall_types")));
-          Setattr(ne, "jccall_args", jargs);
-          if (Getattr(e, "has_probe")) Setattr(ne, "has_probe", "1");
-          if (Getattr(e, "rank")) Setattr(ne, "rank", Copy(Getattr(e, "rank")));
+          Setattr(ne, "node", Getattr(e, "node"));
+          if (a < total) Setattr(ne, "defaulted", "1");
+          if (Getattr(e, "dispname")) Setattr(ne, "dispname", Copy(Getattr(e, "dispname")));
           String *key = NewStringf("%s|%s", Getattr(e, "fname"), stypes);
           List *nl = (List *)Getattr(nm, key);
           if (!nl) { nl = NewList(); Setattr(nm, key, nl); Append(norder, Copy(key)); }
@@ -266,7 +268,7 @@ public:
      overloads whose Julia signatures would be MUTUALLY AMBIGUOUS under multiple
      dispatch (a concrete type and an Any wildcard in complementary positions),
      are merged into one method whose ambiguous slots are generalised to Any and
-     whose correct C wrapper is selected at runtime via _swig_can_ probes.
+     whose correct C wrapper is selected at runtime by a C dispatcher.
      `methods`/`order` are mutated (consumed groups emptied). */
   void emit_method_groups(File *jf, Hash *methods, List *order) {
     if (!order) return;
@@ -370,95 +372,205 @@ public:
         else
           Printf(jf, "%s(%s) = %s\n", Getattr(e, "fname"), Getattr(e, "sig"), Getattr(e, "body"));
       } else {
-        /* stable insertion sort by rank */
-        {
-          List *sorted = NewList();
-          for (int i = 0; i < Len(lst); ++i) {
-            Hash *e = (Hash *)Getitem(lst, i);
-            String *re = Getattr(e, "rank");
-            int pos = Len(sorted);
-            while (re && pos > 0) {
-              String *rp = Getattr((Hash *)Getitem(sorted, pos - 1), "rank");
-              if (!rp || Strcmp(rp, re) <= 0) break;
-              --pos;
-            }
-            Insert(sorted, pos, e);
-          }
-          Clear(lst);
-          for (int i = 0; i < Len(sorted); ++i) Append(lst, Getitem(sorted, i));
-          Delete(sorted);
-        }
-        Hash *e0 = (Hash *)Getitem(lst, 0);
-        /* outer signature: per slot, the common type across all entries; a slot
-           the entries disagree on is generalised to Any so no two merged
-           methods can subsume one another. */
-        List *names0 = NewList(), *types0 = NewList(), *def0 = NewList();
-        split_signature(Getattr(e0, "sig"), names0, types0, def0);
-        List *outtypes = NewList();
-        for (int pi = 0; pi < Len(types0); ++pi) Append(outtypes, Copy((String *)Getitem(types0, pi)));
-        for (int ei = 1; ei < Len(lst); ++ei) {
-          List *ne = NewList(), *te = NewList(), *de = NewList();
-          split_signature(Getattr((Hash *)Getitem(lst, ei), "sig"), ne, te, de);
-          for (int pi = 0; pi < Len(outtypes) && pi < Len(te); ++pi)
-            if (Strcmp((String *)Getitem(outtypes, pi), (String *)Getitem(te, pi)) != 0) {
-              Setitem(outtypes, pi, NewString("Any"));
-            }
-          Delete(ne); Delete(te); Delete(de);
-        }
-        /* No trailing defaults on a merged method: a default would also make it
-           match shorter arities, colliding with the separately-merged method
-           for those (each C++ default-arg arity is its own entry). */
-        String *osig = NewString("");
-        for (int pi = 0; pi < Len(names0); ++pi) {
-          if (pi > 0) Printf(osig, ", ");
-          Printf(osig, "%s::%s", (String *)Getitem(names0, pi), (String *)Getitem(outtypes, pi));
-        }
-        Printf(jf, "function %s(%s)\n", Getattr(e0, "fname"), osig);
-        for (int ei = 0; ei < Len(lst); ++ei) {
-          Hash *e = (Hash *)Getitem(lst, ei);
-          String *body = Copy(Getattr(e, "body"));
-          String *pv = Copy(Getattr(e, "preserve"));
-          String *jargs = Copy(Getattr(e, "jccall_args"));
-          {  /* rename this entry's args to entry-0 names (body, preserve, and
-                the can-probe arg-list must all use the merged positional names);
-                via placeholders, so swapped names (x,y)->(y,x) cannot chain */
-            List *ne = NewList(), *te = NewList(), *de = NewList();
-            split_signature(Getattr(e, "sig"), ne, te, de);
-            String *parts[] = {body, pv, jargs};
-            for (int pass = 0; pass < 2; ++pass) {
-              for (int pi = 0; pi < Len(ne) && pi < Len(names0); ++pi) {
-                String *nm = (String *)Getitem(ne, pi);
-                if (Strcmp(nm, (String *)Getitem(names0, pi)) == 0) continue;
-                String *tmp = NewStringf("_swigjl_arg%d_", pi);
-                for (int k = 0; k < 3; ++k) {
-                  if (pass == 0) rename_ident(parts[k], nm, tmp);
-                  else rename_ident(parts[k], tmp, (String *)Getitem(names0, pi));
-                }
-                Delete(tmp);
-              }
-            }
-            Delete(ne); Delete(te); Delete(de);
-          }
-          bool last = (ei == Len(lst) - 1);
-          if (!last && Getattr(e, "has_probe")) {
-            Printf(jf, "    %s ccall((:_swig_can_%s, _lib), Cint, (%s), %s) != 0\n",
-                   ei == 0 ? "if" : "elseif", Getattr(e, "wname"),
-                   Getattr(e, "jccall_types"), jargs);
-          } else if (!last) {
-            Printf(jf, "    %s true\n", ei == 0 ? "if" : "elseif");
-          } else {
-            Printf(jf, "    else\n");
-          }
-          if (Len(pv) > 0)
-            Printf(jf, "        return GC.@preserve %sbegin %s end\n", pv, body);
-          else
-            Printf(jf, "        return %s\n", body);
-          Delete(body); Delete(pv); Delete(jargs);
-        }
-        Printf(jf, "    end\nend\n");
-        Delete(names0); Delete(types0); Delete(def0); Delete(outtypes); Delete(osig);
+        emit_dispatch_group(jf, lst);
       }
     }
+  }
+
+  /* per slot the type all entries share, else Any */
+  List *common_types(List *lst) {
+    List *res = 0;
+    for (int ei = 0; ei < Len(lst); ++ei) {
+      List *ne = NewList(), *te = NewList(), *de = NewList();
+      split_signature(Getattr((Hash *)Getitem(lst, ei), "sig"), ne, te, de);
+      if (!res) { res = te; te = 0; }
+      else
+        for (int pi = 0; pi < Len(res) && pi < Len(te); ++pi)
+          if (Strcmp((String *)Getitem(res, pi), (String *)Getitem(te, pi)) != 0) Setitem(res, pi, NewString("Any"));
+      Delete(ne); Delete(te); Delete(de);
+    }
+    return res;
+  }
+
+  /* position of n in its overload set as Swig_overload_rank orders it (cached per set) */
+  int overload_pos(Node *n) {
+    Node *head = Getattr(n, "sym:overloaded");
+    String *wn = Getattr(n, "wrap:name");
+    if (!head || !wn) return 0;
+    if (!overload_rank) overload_rank = NewHash();
+    if (!Getattr(overload_rank, wn)) {
+      List *ranked = Swig_overload_rank(head, true);
+      for (int i = 0; ranked && i < Len(ranked); ++i)
+        Setattr(overload_rank, Getattr((Node *)Getitem(ranked, i), "wrap:name"), NewStringf("%d", i));
+      Delete(ranked);
+      if (!Getattr(overload_rank, wn)) Setattr(overload_rank, wn, "99999");
+    }
+    return atoi(Char(Getattr(overload_rank, wn)));
+  }
+
+  /* Julia string constant listing the prototypes of n's overload set, emitted once per set */
+  String *prototypes_const(Node *n) {
+    Node *head = Getattr(n, "sym:overloaded");
+    if (!head) head = n;
+    String *key = NewStringf("%p", head);
+    if (!jl_protos) { jl_protos = NewHash(); f_jl_protos = NewString(""); }
+    String *cname = Getattr(jl_protos, key);
+    if (!cname) {
+      String *txt = NewString("");
+      if (checkAttribute(head, "feature:customdoc", "1")) {
+        /* Swig_prototypes_error yields one C string literal per prototype */
+        String *lits = Swig_prototypes_error(head);
+        List *lines = Split(lits, '\n', -1);
+        for (int i = 0; i < Len(lines); ++i) {
+          String *l = (String *)Getitem(lines, i);
+          const char *q = strchr(Char(l), '"');
+          const char *e = strstr(Char(l), "\\n\"");
+          if (q && e && e > q) Printf(txt, "%s\n", NewStringWithSize(q + 1, (int)(e - q - 1)));
+        }
+        Delete(lines); Delete(lits);
+      } else {
+        for (Node *c = head; c; c = Getattr(c, "sym:nextSibling")) {
+          if (!Getattr(c, "wrap:name")) continue;
+          String *decl = Swig_name_decl(c);
+          Printf(txt, "    %s\n", decl);
+          Delete(decl);
+        }
+      }
+      Replaceall(txt, "\\", "\\\\");
+      Replaceall(txt, "$", "\\$");
+      Replaceall(txt, "\"", "\\\"");
+      cname = NewStringf("_swig_protos_%d", Len(jl_protos) + 1);
+      Printf(f_jl_protos, "const %s = \"%s\"\n", cname, txt);
+      Setattr(jl_protos, key, cname);
+      Delete(txt);
+    }
+    Delete(key);
+    return cname;
+  }
+
+  /* one Julia method whose C dispatcher runs the overloads' typechecks in SWIG's order */
+  void emit_dispatch_group(File *jf, List *lst) {
+    {  /* sets as first met, those needing defaults last; each in Swig_overload_rank order */
+      Hash *sets = NewHash(), *exact = NewHash();
+      for (int i = 0; i < Len(lst); ++i) {
+        Hash *e = (Hash *)Getitem(lst, i);
+        Node *n = Getattr(e, "node");
+        String *hk = NewStringf("%p", Getattr(n, "sym:overloaded") ? Getattr(n, "sym:overloaded") : n);
+        if (!Getattr(sets, hk)) Setattr(sets, hk, NewStringf("%d", Len(sets)));
+        if (!Getattr(e, "defaulted")) Setattr(exact, hk, "1");
+        Setattr(e, "jl:set", hk);
+        Delete(hk);
+      }
+      List *sorted = NewList();
+      for (int i = 0; i < Len(lst); ++i) {
+        Hash *e = (Hash *)Getitem(lst, i);
+        String *hk = Getattr(e, "jl:set");
+        int key = (Getattr(exact, hk) ? 0 : 100000000) + atoi(Char(Getattr(sets, hk))) * 100000 + overload_pos(Getattr(e, "node"));
+        Setattr(e, "jl:order", NewStringf("%d", key));
+        int pos = Len(sorted);
+        while (pos > 0 && atoi(Char(Getattr((Hash *)Getitem(sorted, pos - 1), "jl:order"))) > key) --pos;
+        Insert(sorted, pos, e);
+      }
+      Clear(lst);
+      for (int i = 0; i < Len(sorted); ++i) Append(lst, Getitem(sorted, i));
+      Delete(sorted); Delete(sets); Delete(exact);
+    }
+    Hash *e0 = (Hash *)Getitem(lst, 0);
+    /* outer signature: a slot the entries disagree on is generalised to Any */
+    List *names0 = NewList(), *types0 = NewList(), *def0 = NewList();
+    split_signature(Getattr(e0, "sig"), names0, types0, def0);
+    List *outtypes = common_types(lst);
+    /* no trailing defaults: each default-arg arity is its own merged method */
+    String *osig = NewString("");
+    String *dargs = NewString("");    /* the arguments, boxed for the C dispatcher */
+    String *dtypes = NewString("");
+    String *dparms = NewString("");
+    List *dslot = NewList();          /* outer Julia type of each boxed argument */
+    int nargs = 0;
+    for (int pi = 0; pi < Len(names0); ++pi) {
+      String *nm = (String *)Getitem(names0, pi);
+      if (pi > 0) Printf(osig, ", ");
+      Printf(osig, "%s::%s", nm, (String *)Getitem(outtypes, pi));
+      if (Len(nm) == 0) continue;     /* ::Type{C} of a static method */
+      Printf(dargs, "%s, ", nm);
+      Printf(dtypes, "Any, ");
+      Printf(dparms, "%sjl_value_t* argv%d", nargs ? ", " : "", nargs);
+      Append(dslot, Getitem(outtypes, pi));
+      ++nargs;
+    }
+    String *dname = NewStringf("_swig_jl_dispatch_%d", ++n_dispatch);
+    Printf(f_dispatch, "extern \"C\" SWIGEXPORT int %s(%s) {\n", dname, nargs ? Char(dparms) : "void");
+    String *protos = NewString("");
+    Hash *seenp = NewHash();
+    Printf(jf, "function %s(%s)\n", Getattr(e0, "fname"), osig);
+    Printf(jf, "    _swig_k = ccall((:%s, _lib), Cint, (%s), %s)\n", dname, dtypes, dargs);
+    for (int ei = 0; ei < Len(lst); ++ei) {
+      Hash *e = (Hash *)Getitem(lst, ei);
+      Node *n = Getattr(e, "node");
+      /* C side: the typecheck typemaps of the arguments given, in order */
+      {
+        Printf(f_dispatch, "  try {\n    int _v = 0; (void)_v;\n");
+        int nb = 0, j = 0;
+        for (Parm *p = Getattr(n, "wrap:parms"); p && j < nargs; ) {
+          if (checkAttribute(p, "tmap:in:numinputs", "0")) { p = Getattr(p, "tmap:in:next"); continue; }
+          String *tc = Getattr(p, "tmap:typecheck");
+          bool typed_self = Getattr(p, "self") && !is_wildcard_type((String *)Getitem(dslot, j));
+          if (tc && Len(tc) > 0 && !typed_self) {  /* Julia dispatch already typed self */
+            String *b = Copy(tc);
+            String *iv = NewStringf("argv%d", j);
+            Replaceid(b, Getattr(p, "lname"), "_v");
+            Replaceall(b, "$implicitconv", "0");
+            Replaceall(b, "$input", iv);
+            Replaceall(b, "\n", "\n    ");
+            Printf(f_dispatch, "    %s\n    if (_v) {\n", b);
+            Delete(b); Delete(iv);
+            ++nb;
+          }
+          ++j;
+          p = Getattr(p, "tmap:in:next") ? Getattr(p, "tmap:in:next") : nextSibling(p);
+        }
+        Printf(f_dispatch, "    return %d;\n", ei);
+        for (; nb > 0; --nb) Printf(f_dispatch, "    }\n");
+        Printf(f_dispatch, "  } catch (...) {}\n");
+      }
+      /* rename args to entry-0 names via placeholders, so (x,y)->(y,x) cannot chain */
+      String *body = Copy(Getattr(e, "body"));
+      String *pv = Copy(Getattr(e, "preserve"));
+      {
+        List *ne = NewList(), *te = NewList(), *de = NewList();
+        split_signature(Getattr(e, "sig"), ne, te, de);
+        String *parts[] = {body, pv};
+        for (int pass = 0; pass < 2; ++pass) {
+          for (int pi = 0; pi < Len(ne) && pi < Len(names0); ++pi) {
+            String *nm = (String *)Getitem(ne, pi);
+            if (Strcmp(nm, (String *)Getitem(names0, pi)) == 0) continue;
+            String *tmp = NewStringf("_swigjl_arg%d_", pi);
+            for (int k = 0; k < 2; ++k) {
+              if (pass == 0) rename_ident(parts[k], nm, tmp);
+              else rename_ident(parts[k], tmp, (String *)Getitem(names0, pi));
+            }
+            Delete(tmp);
+          }
+        }
+        Delete(ne); Delete(te); Delete(de);
+      }
+      Printf(jf, "    %s _swig_k == %d\n", ei == 0 ? "if" : "elseif", ei);
+      if (Len(pv) > 0)
+        Printf(jf, "        return GC.@preserve %sbegin %s end\n", pv, body);
+      else
+        Printf(jf, "        return %s\n", body);
+      Delete(body); Delete(pv);
+      String *pc = prototypes_const(n);
+      if (!Getattr(seenp, pc)) {
+        Setattr(seenp, pc, "1");
+        Printf(protos, "%s%s", Len(protos) ? " * " : "", pc);
+      }
+    }
+    Printf(f_dispatch, "  return -1;\n}\n\n");
+    Printf(jf, "    end\n    _swig_overload_error(\"%s\", %s, (%s))\nend\n",
+           Getattr(e0, "dispname") ? Getattr(e0, "dispname") : Getattr(e0, "fname"), protos, dargs);
+    Delete(names0); Delete(types0); Delete(def0); Delete(outtypes); Delete(osig);
+    Delete(dargs); Delete(dtypes); Delete(dparms); Delete(dslot); Delete(dname); Delete(protos); Delete(seenp);
   }
 
   /* Collect class `cls`'s own instance-method names plus those inherited from
@@ -598,6 +710,7 @@ public:
     f_jl_exports = NewString("");
     f_directors    = NewString("");
     f_directors_h  = NewString("");
+    f_dispatch     = NewString("");
 
     /* per-module directors=1 option flips director emission on */
     Node *opts = Getattr(n, "options");
@@ -638,13 +751,6 @@ public:
     SwigType_emit_type_table(f_runtime, f_wrappers);
     Printf(f_init, "extern \"C\" SWIGEXPORT void _swig_jl_init_types() {\n  SWIG_InitializeModule(0);\n%s}\n", f_type_init);
 
-    Dump(f_runtime, f_begin);
-    Dump(f_header, f_begin);
-    Dump(f_directors_h, f_begin);
-    Dump(f_directors, f_begin);
-    Dump(f_wrappers, f_begin);
-    Dump(f_init, f_begin);
-
     String *jlfile = NewStringf("%s%s.jl", SWIG_output_directory(), module_name);
     File *jf = NewFile(jlfile, "w", SWIG_output_files());
     if (!jf) { FileErrorDisplay(jlfile); Exit(EXIT_FAILURE); }
@@ -674,6 +780,20 @@ public:
       "# further properties: add a method for (::YourProxy, ::Val{:name})\n"
       "_swig_getproperty(x, ::Val{s}) where {s} = getfield(x, s)\n"
       "_swig_upcast(x, base::String) = ccall((:swig_jl_upcast, _lib), Ptr{Cvoid}, (Any, Cstring), x, base)\n\n"
+      "# no overload matched: the prototypes and the argument types given\n"
+      "_swig_typename(T) = sprint(show, T; context = :module => @__MODULE__)\n"
+      "function _swig_typedesc(x)\n"
+      "    T = _swig_typename(typeof(x))\n"
+      "    x isa AbstractVector && !isconcretetype(eltype(x)) && !isempty(x) || return T\n"
+      "    string(T, \"[\", join(unique(_swig_typename(typeof(e)) for e in x), \", \"), \"]\")\n"
+      "end\n"
+      "function _swig_overload_msg(name::String, protos::String, args::Tuple)\n"
+      "    have = string(name, \"(\", join((\"::\" * _swig_typedesc(a) for a in args), \", \"), \")\")\n"
+      "    string(\"Wrong number or type of arguments for overloaded function '\", name, \"'.\\n\",\n"
+      "        \"  Possible prototypes are:\\n\", protos, \"  You have: \", have)\n"
+      "end\n"
+      "# behind invokelatest: inferring the message would slow the first call of every caller\n"
+      "_swig_overload_error(name, protos, args) = throw(SwigError(Base.invokelatest(_swig_overload_msg, name, protos, args)))\n\n"
       "function _takestr(p::Ptr{UInt8})\n"
       "    _check(p)\n    s = unsafe_string(p)\n"
       "    ccall((:swig_jl_str_free, _lib), Cvoid, (Ptr{UInt8},), p)\n    s\nend\n\n",
@@ -784,17 +904,11 @@ public:
               /* an opaque `self.ptr` is the derived object's address: cast it to the base */
               String *upcast = NewStringf("_swig_upcast(self, \"%s\")", Getattr(src, "selftype"));
               String *dbody = Copy(Getattr(src, "body"));
-              String *djargs = Copy(Getattr(src, "jccall_args"));
               Replaceall(dbody, "self.ptr", upcast);
-              Replaceall(djargs, "self.ptr", upcast);
               Delete(upcast);
               Setattr(de, "body", dbody);
               Setattr(de, "preserve", Copy(Getattr(src, "preserve")));
-              Setattr(de, "wname", Copy(Getattr(src, "wname")));
-              Setattr(de, "jccall_types", Copy(Getattr(src, "jccall_types")));
-              Setattr(de, "jccall_args", djargs);
-              if (Getattr(src, "has_probe")) Setattr(de, "has_probe", "1");
-              if (Getattr(src, "rank")) Setattr(de, "rank", Copy(Getattr(src, "rank")));
+              Setattr(de, "node", Getattr(src, "node"));
               /* collision key: fname + per-arg TYPES of the rebound signature */
               List *nn = NewList(), *tt = NewList(), *dd = NewList();
               split_signature(sig, nn, tt, dd);
@@ -842,10 +956,20 @@ public:
     emit_method_style_getproperty(jf);
     emit_static_method_style_getproperty(jf);
     emit_docs(jf);
+    if (f_jl_protos) Printf(jf, "\n# prototypes listed when no overload matches\n%s\n", f_jl_protos);
     Printf(jf, "_swig_disambiguate(@__MODULE__)\n");
     if (Len(f_jl_exports) > 0) Printf(jf, "export %s\n", f_jl_exports);
     Printf(jf, "\nend # module %s\n", module_name);
     Delete(jf);
+
+    /* the C dispatchers exist once the Julia methods are emitted */
+    Dump(f_runtime, f_begin);
+    Dump(f_header, f_begin);
+    Dump(f_directors_h, f_begin);
+    Dump(f_directors, f_begin);
+    Dump(f_wrappers, f_begin);
+    Dump(f_dispatch, f_begin);
+    Dump(f_init, f_begin);
 
     if (n_skipped > 0)
       Printf(stderr, "swig -julia: skipped %d declaration(s) with unsupported types\n", n_skipped);
@@ -1282,45 +1406,6 @@ public:
       return SWIG_NOWRAP;
     }
 
-    /* probe function from typecheck typemaps (overload-ladder support) */
-    String *probe_body = NewString("");
-    {
-      Parm *q = parms; int qi = 0;
-      for (; q; ) {
-        if (checkAttribute(q, "tmap:in:numinputs", "0")) { q = Getattr(q, "tmap:in:next"); continue; }
-        String *tc = Getattr(q, "tmap:typecheck");
-        if (tc && Len(tc) > 0) {   /* an empty rule only carries a precedence */
-          String *b = Copy(tc);
-          String *iv = NewStringf("jarg%d", qi);
-          Replaceall(b, "$input", iv);
-          Replaceall(b, "$1", "_v");
-          {  /* typecheck was attached with lname substitution already */
-            String *ln = Getattr(q, "lname");
-            if (ln && Len(ln) > 0) Replaceall(b, ln, "_v");
-          }
-          Printf(probe_body, "  { int _v = 0;\n%s\n  if (!_v) return 0; }\n", b);
-          Delete(b); Delete(iv);
-        }
-        ++qi;
-        q = Getattr(q, "tmap:in:next") ? Getattr(q, "tmap:in:next") : nextSibling(q);
-      }
-    }
-    /* typecheck precedences, zero-padded: merged overloads are probed in this
-       order, so a narrower type (DM vector) is tried before a wider one (MX vector) */
-    String *rank = NewString("");
-    for (Parm *q = parms; q; ) {
-      if (checkAttribute(q, "tmap:in:numinputs", "0")) { q = Getattr(q, "tmap:in:next"); continue; }
-      String *pr = Getattr(q, "tmap:typecheck:precedence");
-      Printf(rank, "%08d.", pr ? atoi(Char(pr)) : 99999999);
-      q = Getattr(q, "tmap:in:next") ? Getattr(q, "tmap:in:next") : nextSibling(q);
-    }
-    bool has_probe = Len(probe_body) > 0;
-    if (has_probe) {
-      Printf(f_wrappers, "extern \"C\" SWIGEXPORT int _swig_can_%s(%s) {\n  SWIG_JL_ENTER();\n  try {\n%s  return 1;\n  } SWIG_JL_CATCH(0)\n}\n\n",
-             wname, Len(csig) ? Char(csig) : "void", probe_body);
-    }
-    Delete(probe_body);
-
     /* assemble the Julia parameter list; defaults only as a trailing run */
     if (jarg_names) {
       int first_def = Len(jarg_names);
@@ -1515,11 +1600,8 @@ public:
       Setattr(e, "sig", Copy(sig));
       Setattr(e, "body", Copy(body));
       Setattr(e, "preserve", Copy(preserve));
-      Setattr(e, "wname", Copy(wname));
-      Setattr(e, "jccall_types", Copy(jccall_types));
-      Setattr(e, "jccall_args", Copy(jccall_args));
-      if (has_probe) Setattr(e, "has_probe", "1");
-      Setattr(e, "rank", rank);
+      Setattr(e, "node", n);
+      if (in_static && class_jlname) Setattr(e, "dispname", NewStringf("%s.%s", class_jlname, fname));
       Append(lst, e);
       Delete(key);
     }
@@ -1537,11 +1619,7 @@ public:
         Setattr(me, "sig", Copy(sig));
         Setattr(me, "body", Copy(body));
         Setattr(me, "preserve", Copy(preserve));
-        Setattr(me, "wname", Copy(wname));
-        Setattr(me, "jccall_types", Copy(jccall_types));
-        Setattr(me, "jccall_args", Copy(jccall_args));
-        if (has_probe) Setattr(me, "has_probe", "1");
-        Setattr(me, "rank", Copy(rank));
+        Setattr(me, "node", n);
         Setattr(me, "selftype", Copy(class_jlname));
         if (!class_members) class_members = NewHash();
         List *lst = (List *)Getattr(class_members, class_jlname);

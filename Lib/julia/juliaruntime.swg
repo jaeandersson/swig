@@ -19,6 +19,7 @@
 #include <map>
 #include <string>
 #include <stdexcept>
+#include <limits>
 SWIGRUNTIME std::map<std::string, swig_type_info*>& swig_jl_proxy_registry() {
   static std::map<std::string, swig_type_info*> reg;
   return reg;
@@ -102,6 +103,26 @@ SWIGRUNTIME jl_value_t* swig_jl_new_pointer_obj(void* ptr, swig_type_info* type)
   return jl_box_voidpointer(ptr);
 }
 #define SWIG_NewPointerObj(ptr, type, flags) swig_jl_new_pointer_obj(ptr, type)
+/* typecheck helpers: x isa Base.<name>; an Integer that fits T (and the long long ctype) */
+SWIGRUNTIME int swig_jl_isa_base(jl_value_t* x, const char* name) {
+  jl_value_t* t = jl_get_global(jl_base_module, jl_symbol(name));
+  return t && jl_isa(x, t);
+}
+template <typename T> SWIGRUNTIME int swig_jl_check_int(jl_value_t* x) {
+  long long v;
+  if (jl_typeis(x, jl_int64_type)) {
+    v = jl_unbox_int64(x);
+  } else if (jl_is_bool(x)) {
+    v = jl_unbox_bool(x);
+  } else {
+    if (!swig_jl_isa_base(x, "Integer")) return 0;
+    jl_value_t* r = jl_call2(jl_get_function(jl_base_module, "convert"), (jl_value_t*)jl_int64_type, x);
+    if (!r || !jl_typeis(r, jl_int64_type)) { jl_exception_clear(); return 0; }
+    v = jl_unbox_int64(r);
+  }
+  if (std::numeric_limits<T>::is_signed) return v >= (long long)std::numeric_limits<T>::min() && v <= (long long)std::numeric_limits<T>::max();
+  return v >= 0 && (unsigned long long)v <= (unsigned long long)std::numeric_limits<T>::max();
+}
 #define SWIG_exception_fail(code, msg) do { throw std::runtime_error(msg); } while (0)
 #define SWIG_exception(code, msg)      do { throw std::runtime_error(msg); } while (0)
 #define SWIG_fail                      throw std::runtime_error("SWIG conversion failed")
