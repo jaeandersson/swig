@@ -154,6 +154,7 @@ static void swig_jl_aset(jl_value_t* a, size_t i, jl_value_t* x) {
 static std::vector<double> swig_jl_to_vec_double(jl_value_t* v) {
   if (!jl_is_array(v)) throw std::runtime_error("expected a numeric vector");
   JL_GC_PUSH1(&v);
+  SwigJlGcPop pop;
   size_t n = swig_jl_array_len(v);
   std::vector<double> out(n);
   jl_value_t* eltype = (jl_value_t*)jl_array_eltype(v);
@@ -164,10 +165,8 @@ static std::vector<double> swig_jl_to_vec_double(jl_value_t* v) {
     int64_t* data = swig_jl_array_ptr<int64_t>(v);
     for (size_t i = 0; i < n; ++i) out[i] = (double)data[i];
   } else {
-    JL_GC_POP();
     throw std::runtime_error("expected a Float64/Int64 vector");
   }
-  JL_GC_POP();
   return out;
 }
 static std::vector<long long> swig_jl_to_vec_int(jl_value_t* v) {
@@ -175,51 +174,51 @@ static std::vector<long long> swig_jl_to_vec_int(jl_value_t* v) {
   if ((jl_value_t*)jl_array_eltype(v) != (jl_value_t*)jl_int64_type)
     throw std::runtime_error("expected an Int64 vector");
   JL_GC_PUSH1(&v);
+  SwigJlGcPop pop;
   size_t n = swig_jl_array_len(v);
   std::vector<long long> out(n);
   int64_t* data = swig_jl_array_ptr<int64_t>(v);
   for (size_t i = 0; i < n; ++i) out[i] = (long long)data[i];
-  JL_GC_POP();
   return out;
 }
 static std::vector<std::string> swig_jl_to_vec_string(jl_value_t* v) {
   if (!jl_is_array(v)) throw std::runtime_error("expected a string vector");
   JL_GC_PUSH1(&v);
+  SwigJlGcPop pop;
   size_t n = swig_jl_array_len(v);
   std::vector<std::string> out(n);
   for (size_t i = 0; i < n; ++i) {
     jl_value_t* el = swig_jl_aref(v, i);
-    if (!jl_is_string(el)) { JL_GC_POP(); throw std::runtime_error("expected a string vector"); }
+    if (!jl_is_string(el)) throw std::runtime_error("expected a string vector");
     out[i] = std::string(jl_string_ptr(el), jl_string_len(el));
   }
-  JL_GC_POP();
   return out;
 }
 static jl_value_t* swig_jl_from_vec_double(const std::vector<double>& v) {
   jl_value_t* atype = jl_apply_array_type((jl_value_t*)jl_float64_type, 1);
   jl_array_t* a = jl_alloc_array_1d(atype, v.size());
   JL_GC_PUSH1(&a);
+  SwigJlGcPop pop;
   double* data = swig_jl_array_ptr<double>((jl_value_t*)a);
   for (size_t i = 0; i < v.size(); ++i) data[i] = v[i];
-  JL_GC_POP();
   return (jl_value_t*)a;
 }
 static jl_value_t* swig_jl_from_vec_int(const std::vector<long long>& v) {
   jl_value_t* atype = jl_apply_array_type((jl_value_t*)jl_int64_type, 1);
   jl_array_t* a = jl_alloc_array_1d(atype, v.size());
   JL_GC_PUSH1(&a);
+  SwigJlGcPop pop;
   int64_t* data = swig_jl_array_ptr<int64_t>((jl_value_t*)a);
   for (size_t i = 0; i < v.size(); ++i) data[i] = (int64_t)v[i];
-  JL_GC_POP();
   return (jl_value_t*)a;
 }
 static jl_value_t* swig_jl_from_vec_string(const std::vector<std::string>& v) {
   jl_value_t* atype = jl_apply_array_type((jl_value_t*)jl_string_type, 1);
   jl_array_t* a = jl_alloc_array_1d(atype, v.size());
   JL_GC_PUSH1(&a);
+  SwigJlGcPop pop;
   for (size_t i = 0; i < v.size(); ++i)
     swig_jl_aset((jl_value_t*)a, i, jl_cstr_to_string(v[i].c_str()));
-  JL_GC_POP();
   return (jl_value_t*)a;
 }
 /* pair -> Julia 2-tuple (each element pre-boxed by the backend-synthesised

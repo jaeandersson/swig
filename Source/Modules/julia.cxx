@@ -1321,12 +1321,12 @@ public:
             "    jl_value_t* __a = jl_apply_array_type((jl_value_t*)jl_any_type, 1);\n"
             "    jl_array_t* __ja = jl_alloc_array_1d(__a, __r.size());\n"
             "    JL_GC_PUSH1(&__ja);\n"
+            "    SwigJlGcPop __ja_pop;\n"
             "    for (size_t __i=0; __i<__r.size(); ++__i) {\n"
             "      const %s& __e = __r[__i];\n"
             "      swig_jl_aset((jl_value_t*)__ja, __i, %s);\n"
             "    }\n"
-            "    $result = swig_jl_narrow((jl_value_t*)__ja, %s);\n"
-            "    JL_GC_POP(); }", bind, es, box, eltc);
+            "    $result = swig_jl_narrow((jl_value_t*)__ja, %s); }", bind, es, box, eltc);
           Delete(es); Delete(box); Delete(probe); Delete(eltc);
           if (elt) Delete(elt);
           done = true;
@@ -1339,7 +1339,8 @@ public:
         if (b1 && b2) {
           *ct = NewString("jl_value_t*"); *jt = NewString("Any");
           *jlout = NewString("_check($call)::Tuple");
-          *outcode = NewStringf("  { %s\n    $result = swig_jl_make_tuple2(%s, %s); }", bind, b1, b2);
+          *outcode = NewStringf("  { %s\n    jl_value_t* __p1 = 0;\n    JL_GC_PUSH1(&__p1);\n    SwigJlGcPop __p1_pop;\n"
+                                "    __p1 = %s;\n    $result = swig_jl_make_tuple2(__p1, %s); }", bind, b1, b2);
           done = true;
         }
         if (b1) Delete(b1);
@@ -2132,10 +2133,9 @@ public:
         Printf(ret_marshal, "      %s;\n", cres);
         Replaceall(tm, "$input", "__r");
         Replaceall(tm, "$result", "c_result");
-        /* a return that does not convert: pop the GC frame, name the override */
+        /* a return that does not convert: name the override */
         Printf(ret_marshal, "      try { %s }\n", tm);
         Printf(ret_marshal, "      catch (const std::exception &__e) {\n"
-               "        JL_GC_POP();\n"
                "        throw std::runtime_error(std::string(\"Julia director %s returned an invalid value: \") + __e.what());\n"
                "      }\n", where);
         Delete(cres); Delete(tm);
@@ -2153,27 +2153,28 @@ public:
         "  jl_value_t *__f = Swig::swig_director_fn(\"%s\");\n", dispatch);
       Printf(w->code, "  if (__self && __f) {\n");
       Printf(w->code, "    jl_value_t **__jargs;\n");
-      Printf(w->code, "    JL_GC_PUSHARGS(__jargs, %d);\n", nargs + 1);
+      /* extra slot roots the result while it converts */
+      Printf(w->code, "    JL_GC_PUSHARGS(__jargs, %d);\n", nargs + 2);
+      Printf(w->code, "    SwigJlGcPop __jargs_pop;\n");
       Printf(w->code, "    __jargs[0] = __self;\n");
       Printv(w->code, args_build, NIL);
-      Printf(w->code, "    jl_value_t *__r = jl_call(__f, __jargs, %d);\n", nargs + 1);
+      Printf(w->code, "    jl_value_t *__r = __jargs[%d] = jl_call(__f, __jargs, %d);\n", nargs + 1, nargs + 1);
       /* upcall raised: surface the Julia exception's own message to C++ */
       Printf(w->code,
         "    if (!__r) {\n"
         "      std::string __em = Swig::swig_director_exception_msg();\n"
-        "      JL_GC_POP();\n"
         "      throw std::runtime_error(\"Julia director %s threw: \" + __em);\n"
         "    }\n", where);
       /* a non-overridden method returns the no-override sentinel -> fall to base */
       Printf(w->code,
         "    if (__r != Swig::swig_director_global(\"_swig_director_no_override\")) {\n");
       if (is_void) {
-        Printf(w->code, "      (void)__r; JL_GC_POP(); return;\n");
+        Printf(w->code, "      (void)__r; return;\n");
       } else {
         Printv(w->code, ret_marshal, NIL);
-        Printf(w->code, "      JL_GC_POP(); return c_result;\n");
+        Printf(w->code, "      return c_result;\n");
       }
-      Printf(w->code, "    }\n    JL_GC_POP();\n  }\n");
+      Printf(w->code, "    }\n  }\n");
       /* fall-through: pure -> throw, else call the C++ base impl */
       if (pure_virtual) {
         Printf(w->code, "  throw %s;\n", basecall);
