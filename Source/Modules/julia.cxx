@@ -1600,8 +1600,13 @@ public:
       class_jlname, class_has_refs ? "    _swig_refs::Any\n" : "", class_jlname,
       class_has_refs ? ", nothing" : "", class_jlname);
     /* copy-constructible proxy: give Julia an independent copy/deepcopy
-       (proxies otherwise alias one C++ object). */
-    if (class_has_copyctor) {
+       (proxies otherwise alias one C++ object).  %feature("julia:copy", "m")
+       names a member method to use instead, for a copy ctor that shares. */
+    String *copy_method = Getattr(n, "feature:julia:copy");
+    if (copy_method) {
+      Printf(f_jl_body, "Base.copy(x::%s) = %s(x)\n", class_jlname, copy_method);
+      Printf(f_jl_body, "Base.deepcopy(x::%s) = %s(x)\n", class_jlname, copy_method);
+    } else if (class_has_copyctor) {
       Printf(f_jl_body, "Base.copy(x::%s) = %s(x)\n", class_jlname, class_jlname);
       Printf(f_jl_body, "Base.deepcopy(x::%s) = %s(x)\n", class_jlname, class_jlname);
     }
