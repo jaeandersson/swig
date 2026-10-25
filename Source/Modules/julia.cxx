@@ -111,6 +111,7 @@ public:
     String *out = NewString("");
     const char *p = Char(s), *f = Char(from);
     size_t fl = strlen(f);
+    if (fl == 0) return;
     for (size_t i = 0; p[i];) {
       bool idprev = i > 0 && (isalnum((unsigned char)p[i - 1]) || p[i - 1] == '_' || p[i - 1] == '.');
       if (!idprev && strncmp(p + i, f, fl) == 0 && !(isalnum((unsigned char)p[i + fl]) || p[i + fl] == '_')) {
@@ -249,6 +250,7 @@ public:
           Setattr(ne, "preserve", pres);
           Setattr(ne, "node", Getattr(e, "node"));
           if (a < total) Setattr(ne, "defaulted", "1");
+          if (Getattr(e, "partial")) Setattr(ne, "partial", NewStringWithSize(Char(Getattr(e, "partial")), a < Len(Getattr(e, "partial")) ? a : Len(Getattr(e, "partial"))));
           if (Getattr(e, "dispname")) Setattr(ne, "dispname", Copy(Getattr(e, "dispname")));
           String *key = NewStringf("%s|%s", Getattr(e, "fname"), stypes);
           List *nl = (List *)Getattr(nm, key);
@@ -272,6 +274,7 @@ public:
      `methods`/`order` are mutated (consumed groups emptied). */
   void emit_method_groups(File *jf, Hash *methods, List *order) {
     if (!order) return;
+    List *out = NewList();   /* per Julia method: Hash{entries, fallback} */
     for (int oi = 0; oi < Len(order); ++oi) {
       String *key = (String *)Getitem(order, oi);
       List *lst = (List *)Getattr(methods, key);
@@ -363,7 +366,16 @@ public:
         }
         Delete(gen);
       }
-      if (Len(lst) == 1) {
+      Hash *m = NewHash();
+      Setattr(m, "entries", Copy(lst));
+      Append(out, m);
+    }
+    add_fallbacks(out);
+    sort_by_overload_rank(out);
+    for (int i = 0; i < Len(out); ++i) {
+      Hash *m = (Hash *)Getitem(out, i);
+      List *lst = (List *)Getattr(m, "entries");
+      if (Len(lst) == 1 && !Getattr(m, "fallback")) {
         Hash *e = (Hash *)Getitem(lst, 0);
         String *pv = Getattr(e, "preserve");
         if (Len(pv) > 0)
@@ -372,24 +384,104 @@ public:
         else
           Printf(jf, "%s(%s) = %s\n", Getattr(e, "fname"), Getattr(e, "sig"), Getattr(e, "body"));
       } else {
-        emit_dispatch_group(jf, lst);
+        emit_dispatch_group(jf, lst, Getattr(m, "fallback") != 0);
       }
     }
+    Delete(out);
   }
 
-  /* per slot the type all entries share, else Any */
-  List *common_types(List *lst) {
+  /* per slot the type all entries share, else Any (also where partial, with partial_any) */
+  List *common_types(List *lst, bool partial_any) {
     List *res = 0;
     for (int ei = 0; ei < Len(lst); ++ei) {
+      Hash *e = (Hash *)Getitem(lst, ei);
       List *ne = NewList(), *te = NewList(), *de = NewList();
-      split_signature(Getattr((Hash *)Getitem(lst, ei), "sig"), ne, te, de);
+      split_signature(Getattr(e, "sig"), ne, te, de);
       if (!res) { res = te; te = 0; }
       else
         for (int pi = 0; pi < Len(res) && pi < Len(te); ++pi)
           if (Strcmp((String *)Getitem(res, pi), (String *)Getitem(te, pi)) != 0) Setitem(res, pi, NewString("Any"));
+      String *pf = Getattr(e, "partial");
+      for (int pi = 0; partial_any && pf && pi < Len(res) && pi < Len(pf); ++pi)
+        if (Char(pf)[pi] == '1') Setitem(res, pi, NewString("Any"));
       Delete(ne); Delete(te); Delete(de);
     }
     return res;
+  }
+
+  /* per name and arity with a partial jlparam: an Any-typed method dispatching the rest at runtime */
+  void add_fallbacks(List *out) {
+    Hash *fams = NewHash();
+    List *forder = NewList();
+    Hash *partial = NewHash();
+    for (int i = 0; i < Len(out); ++i) {
+      List *lst = (List *)Getattr((Hash *)Getitem(out, i), "entries");
+      for (int ei = 0; ei < Len(lst); ++ei) {
+        Hash *e = (Hash *)Getitem(lst, ei);
+        List *ne = NewList(), *te = NewList(), *de = NewList();
+        split_signature(Getattr(e, "sig"), ne, te, de);
+        /* a static method's ::Type{C} slot keeps it apart from same-named functions */
+        bool st = Len(ne) > 0 && Len((String *)Getitem(ne, 0)) == 0;
+        String *fk = NewStringf("%s|%d|%s", Getattr(e, "fname"), Len(te), st ? (String *)Getitem(te, 0) : "");
+        List *fam = (List *)Getattr(fams, fk);
+        if (!fam) { fam = NewList(); Setattr(fams, fk, fam); Append(forder, Copy(fk)); }
+        Append(fam, e);
+        if (Getattr(e, "partial") && Strchr(Getattr(e, "partial"), '1')) Setattr(partial, fk, "1");
+        Delete(fk); Delete(ne); Delete(te); Delete(de);
+      }
+    }
+    for (int fi = 0; fi < Len(forder); ++fi) {
+      if (!Getattr(partial, (String *)Getitem(forder, fi))) continue;
+      List *fam = (List *)Getattr(fams, (String *)Getitem(forder, fi));
+      List *ft = common_types(fam, true);
+      Hash *fb = NewHash();
+      Setattr(fb, "entries", Copy(fam));
+      Setattr(fb, "fallback", "1");
+      bool merged = false;
+      for (int i = 0; i < Len(out) && !merged; ++i) {  /* a method of that signature joins it */
+        List *ol = (List *)Getattr((Hash *)Getitem(out, i), "entries");
+        List *ot = common_types(ol, false);
+        if (Strcmp(Getattr((Hash *)Getitem(ol, 0), "fname"), Getattr((Hash *)Getitem(fam, 0), "fname")) == 0
+            && sigs_equal(ot, ft)) {
+          Setitem(out, i, fb);
+          merged = true;
+        }
+        Delete(ot);
+      }
+      if (!merged) Append(out, fb);
+      Delete(ft);
+    }
+    Delete(fams); Delete(forder); Delete(partial);
+  }
+
+  /* emission order is SWIG's overload order: Julia's tie-break on overlaps keeps the first */
+  void sort_by_overload_rank(List *out) {
+    Hash *fidx = NewHash(), *sidx = NewHash();
+    List *sorted = NewList();
+    for (int i = 0; i < Len(out); ++i) {
+      Hash *m = (Hash *)Getitem(out, i);
+      List *lst = (List *)Getattr(m, "entries");
+      long best = -1;
+      for (int ei = 0; ei < Len(lst); ++ei) {
+        Hash *e = (Hash *)Getitem(lst, ei);
+        Node *n = Getattr(e, "node");
+        String *fn = Getattr(e, "fname");
+        if (!Getattr(fidx, fn)) Setattr(fidx, fn, NewStringf("%d", Len(fidx)));
+        String *hk = NewStringf("%s|%p", fn, Getattr(n, "sym:overloaded") ? Getattr(n, "sym:overloaded") : n);
+        if (!Getattr(sidx, hk)) Setattr(sidx, hk, NewStringf("%d", Len(sidx)));
+        long k = atol(Char(Getattr(fidx, fn))) * 100000000L + atol(Char(Getattr(sidx, hk))) * 100000L + overload_pos(n);
+        if (best < 0 || k < best) best = k;
+        Delete(hk);
+      }
+      String *ks = NewStringf("%ld", best);
+      Setattr(m, "jl:order", ks);
+      int pos = Len(sorted);
+      while (pos > 0 && atol(Char(Getattr((Hash *)Getitem(sorted, pos - 1), "jl:order"))) > best) --pos;
+      Insert(sorted, pos, m);
+    }
+    Clear(out);
+    for (int i = 0; i < Len(sorted); ++i) Append(out, Getitem(sorted, i));
+    Delete(sorted); Delete(fidx); Delete(sidx);
   }
 
   /* position of n in its overload set as Swig_overload_rank orders it (cached per set) */
@@ -449,7 +541,7 @@ public:
   }
 
   /* one Julia method whose C dispatcher runs the overloads' typechecks in SWIG's order */
-  void emit_dispatch_group(File *jf, List *lst) {
+  void emit_dispatch_group(File *jf, List *lst, bool fallback) {
     {  /* sets as first met, those needing defaults last; each in Swig_overload_rank order */
       Hash *sets = NewHash(), *exact = NewHash();
       for (int i = 0; i < Len(lst); ++i) {
@@ -479,7 +571,7 @@ public:
     /* outer signature: a slot the entries disagree on is generalised to Any */
     List *names0 = NewList(), *types0 = NewList(), *def0 = NewList();
     split_signature(Getattr(e0, "sig"), names0, types0, def0);
-    List *outtypes = common_types(lst);
+    List *outtypes = common_types(lst, fallback);
     /* no trailing defaults: each default-arg arity is its own merged method */
     String *osig = NewString("");
     String *dargs = NewString("");    /* the arguments, boxed for the C dispatcher */
@@ -800,14 +892,14 @@ public:
       module_name);
     Printf(jf, "%s",
       "# Overloads whose argument unions overlap are ambiguous there: the overlap calls the\n"
-      "# overload fitting more arguments more tightly, else the one declared first.\n"
+      "# overload fitting more arguments more tightly, else the one emitted first (SWIG's order).\n"
       "function _swig_disambiguate(mod::Module)\n"
       "    for _ in 1:3\n"
       "        added = false\n"
       "        for n in Base.names(mod; all = true)\n"
       "            Base.isdefined(mod, n) || continue\n"
       "            f = Base.getfield(mod, n)\n"
-      "            f isa Base.Function && Base.parentmodule(f) === mod || continue\n"
+      "            (f isa Base.Function || f isa Core.DataType) && Base.parentmodule(f) === mod || continue\n"
       "            ms = Base.sort!(Base.collect(Base.methods(f, mod)), by = m -> m.line)\n"
       "            for i in Base.eachindex(ms), j in (i + 1):Base.length(ms)\n"
       "                m1, m2 = ms[i], ms[j]\n"
@@ -821,7 +913,8 @@ public:
       "                    Base.sum(Base.Int(p1[k] <: p2[k]) - Base.Int(p2[k] <: p1[k]) for k in 2:Base.length(p1); init = 0) : 0\n"
       "                w = score < 0 ? m2 : m1\n"
       "                a = [Base.Symbol(:x, k) for k in Base.eachindex(ts)]\n"
-      "                Core.eval(mod, :((::$(Base.typeof(f)))($([:($(a[k])::$(ts[k])) for k in Base.eachindex(ts)]...)) =\n"
+      "                F = f isa Core.DataType ? Type{f} : Base.typeof(f)\n"
+      "                Core.eval(mod, :((::$F)($([:($(a[k])::$(ts[k])) for k in Base.eachindex(ts)]...)) =\n"
       "                    Base.invoke($f, $(Tuple{Base.collect(w.sig.parameters)[2:end]...}), $(a...))))\n"
       "                added = true\n"
       "            end\n"
@@ -910,6 +1003,7 @@ public:
               Setattr(de, "body", dbody);
               Setattr(de, "preserve", Copy(Getattr(src, "preserve")));
               Setattr(de, "node", Getattr(src, "node"));
+              Setattr(de, "partial", Copy(Getattr(src, "partial")));
               /* collision key: fname + per-arg TYPES of the rebound signature */
               List *nn = NewList(), *tt = NewList(), *dd = NewList();
               split_signature(sig, nn, tt, dd);
@@ -1320,6 +1414,7 @@ public:
     String *jccall_types = NewString("");
     String *jccall_args = NewString("");
     String *preserve = NewString("");
+    String *partial = NewString(in_static ? "0" : "");  /* per Julia slot: partial annotation */
     int idx = 0;
     bool ok = true;
     Parm *p = parms;
@@ -1358,6 +1453,7 @@ public:
       }
       if (!jarg_names) { jarg_names = NewList(); jarg_defaults = NewList(); }
       Append(jarg_names, NewStringf("%s::%s", an, jp ? jp : (pproxy ? pproxy : (String*)NewString("Any"))));
+      Append(partial, jp && Getattr(p, "tmap:jlparam:partial") ? "1" : "0");
       {  /* compactdefaultargs: literal + empty-container defaults, trailing run */
         String *dv = Getattr(p, "value");
         String *jdv = NewString("");
@@ -1605,6 +1701,7 @@ public:
       Setattr(e, "body", Copy(body));
       Setattr(e, "preserve", Copy(preserve));
       Setattr(e, "node", n);
+      Setattr(e, "partial", Copy(partial));
       if (in_static && class_jlname) Setattr(e, "dispname", NewStringf("%s.%s", class_jlname, fname));
       Append(lst, e);
       Delete(key);
@@ -1624,6 +1721,7 @@ public:
         Setattr(me, "body", Copy(body));
         Setattr(me, "preserve", Copy(preserve));
         Setattr(me, "node", n);
+        Setattr(me, "partial", Copy(partial));
         Setattr(me, "selftype", Copy(class_jlname));
         if (!class_members) class_members = NewHash();
         List *lst = (List *)Getattr(class_members, class_jlname);
@@ -1648,7 +1746,7 @@ public:
 
     Delete(fname); Delete(sig); Delete(body); Delete(callcore);
     Delete(csig); Delete(jargs); Delete(jccall_types); Delete(jccall_args);
-    Delete(preserve); Delete(wname);
+    Delete(preserve); Delete(partial); Delete(wname);
     if (ret_proxy) Delete(ret_proxy);
     DelWrapper(w);
     return SWIG_OK;

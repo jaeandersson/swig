@@ -7,6 +7,8 @@
  *   jlparam -- user-facing ::Type annotation on the Julia method parameter
  *   jlout   -- Julia expression converting the checked ccall result;
  *              `$call` is substituted with the ccall expression
+ *   jlparam partial="1" -- the annotation lists common types only; an Any-typed
+ *              method dispatches other values at runtime
  */
 
 %include <juliaruntime.swg>
