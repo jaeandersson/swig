@@ -42,6 +42,13 @@ public class java_guest_object_runme {
     check(new Bag(List.of(new Vec(1))).count(List.of(new Pt(1, 2), new Pt(3, 4))).equals("pt2"), "merged member method");
     try { noMatch(); check(false, "no match"); }
     catch (IllegalArgumentException e) { check(e.getMessage().startsWith("No matching overload of 'kind'"), "no match -> IllegalArgumentException: " + e.getMessage().replace('\n', '|')); }
+    // output arguments
+    check(java_guest_object.halve(new Vec(8)).get(0) == 4, "void + 1 output -> Vec");
+    List<Vec> sp = java_guest_object.split(new Vec(5));
+    check(sp.size() == 2 && sp.get(0).get(0) == 4 && sp.get(1).get(0) == 6, "void + 2 outputs -> List<Vec>");
+    List<Vec> ng = java_guest_object.negate(new Vec(3));
+    check(ng.size() == 2 && ng.get(0).get(0) == -3 && ng.get(1).get(0) == 4, "result + output -> List<Vec>");
+
     // directors with guest types, from the main thread and C++ threads
     class Doubler extends Visitor {
       @Override public Vec visit(List<Vec> xs) {

@@ -321,6 +321,13 @@ SWIGRUNTIME void SWIG_JavaGuestMapPut(jobject map, jobject key, jobject value) {
   SWIG_JavaGuestCheck(jenv);
 }
 
+/* %append_output target: the only output, or appended to the List created by the wrapper */
+SWIGRUNTIME jobject SWIG_JavaGuestAppendOutput(jobject result, jobject obj) {
+  if (!result) return obj;
+  SWIG_JavaGuestListAppend(result, obj);
+  return result;
+}
+
 SWIGRUNTIME void SWIG_JavaGuestRelease(jobject obj) {
   if (obj) SWIG_JavaGuestEnvChecked()->DeleteLocalRef(obj);
 }
@@ -415,6 +422,7 @@ SWIGINTERNINLINE jobject SWIG_From_dec(T)(T value) {
 %java_guest_from(float, jenv->CallStaticObjectMethod(j.Double, j.Double_valueOf, (jdouble)value))
 
 #define %dirout_fail(code, msg) SWIG_exception_fail(code, msg)
+#define %append_output(obj) $result = SWIG_JavaGuestAppendOutput($result, obj)
 
 /* Module init: type table and proxy registry, then %init code; closed by the generator */
 %insert(init) "swiginit.swg";

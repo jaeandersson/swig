@@ -119,6 +119,12 @@ template<typename T> bool to_list(jobject o, std::vector<T> *out, bool (*conv)(j
 %typemap(javadirectorin) const std::vector<Vec>& "$imclassname.swigCast($jniinput)"
 %guest_type(Pt, to_pt, 510, "Vec,double")
 
+// Output arguments are returned
+%typemap(in, numinputs=0) Vec& OUTPUT (Vec tmp) { $1 = &tmp; }
+%typemap(argout) Vec& OUTPUT { %append_output(SWIG_NewPointerObj(new Vec(*$1), SWIGTYPE_p_Vec, SWIG_POINTER_OWN)); }
+%typemap(jstype) Vec& OUTPUT "Vec"
+%apply Vec& OUTPUT { Vec& lo, Vec& hi };
+
 %typemap(jni) const Base& "jobject"
 %typemap(jtype) const Base& "Object"
 %typemap(jstype) const Base& "Base"
@@ -150,6 +156,10 @@ Pt first(const std::vector<Pt>& v) { return v.at(0); }
 // Widening ties: (double,double) from both families, Vec family has lower precedence
 std::string join(const Vec&, const Vec&) { return "vec"; }
 std::string join(const Pt&, const Pt&) { return "pt"; }
+
+void halve(const Vec& x, Vec& OUTPUT) { OUTPUT = Vec(x.get(0) / 2); }
+void split(const Vec& x, Vec& lo, Vec& hi) { lo = Vec(x.get(0) - 1); hi = Vec(x.get(0) + 1); }
+Vec negate(const Vec& x, Vec& OUTPUT) { OUTPUT = Vec(x.get(0) + 1); return Vec(-x.get(0)); }
 
 struct Bag {
   std::string what;

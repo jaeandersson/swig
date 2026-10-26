@@ -1483,6 +1483,53 @@ public:
       Swig_warning(WARN_JAVA_TYPEMAP_JTYPE_UNDEF, input_file, line_number, "No jtype typemap defined for %s\n", SwigType_str(returntype, 0));
     }
 
+    // Guest mode: output arguments (argout typemaps) are returned, a List if there are several
+    int guest_nout = 0;
+    bool guest_list_from_result = false;
+    if (guest_flag && !is_destructor) {
+      Swig_typemap_attach_parms("argout", l, 0);
+      List *outtypes = NewList();
+      for (p = l; p; p = nextSibling(p)) {
+	if (Getattr(p, "tmap:argout")) {
+	  String *jt = Getattr(p, "tmap:jstype") ? Copy(Getattr(p, "tmap:jstype")) : NewString("Object");
+	  substituteClassname(Getattr(p, "type"), jt);
+	  Append(outtypes, jt);
+	  Delete(jt);
+	}
+      }
+      bool rvoid = Cmp(c_return_type, "void") == 0;
+      if (Len(outtypes) && (rvoid || Cmp(c_return_type, "jobject") == 0)) {
+	if (!rvoid) {
+	  String *rt = Copy(Swig_typemap_lookup("jstype", n, "", 0));
+	  substituteClassname(returntype, rt);
+	  Insert(outtypes, 0, rt);
+	  Delete(rt);
+	  guest_list_from_result = true;
+	}
+	guest_nout = Len(outtypes);
+	String *outtype = 0;
+	if (guest_nout == 1) {
+	  outtype = Copy(Getitem(outtypes, 0));
+	} else {
+	  String *t0 = Getitem(outtypes, 0);
+	  bool same = true;
+	  for (Iterator it = First(outtypes); it.item; it = Next(it))
+	    same = same && Cmp(it.item, t0) == 0;
+	  const char *boxed = Cmp(t0, "double") == 0 ? "Double" : Cmp(t0, "long") == 0 ? "Long" : Cmp(t0, "boolean") == 0 ? "Boolean" : Cmp(t0, "int") == 0 ? "Integer" : Char(t0);
+	  outtype = NewStringf("java.util.List<%s>", same ? boxed : "Object");
+	}
+	Setattr(n, "java:guest:outtype", outtype);
+	Delete(outtype);
+	Clear(c_return_type);
+	Printf(c_return_type, "jobject");
+	Clear(im_return_type);
+	Printf(im_return_type, "Object");
+      } else if (Len(outtypes)) {
+	Swig_warning(WARN_JAVA_TYPEMAP_JNI_UNDEF, input_file, line_number, "Output arguments of %s not returned: the return type does not cross as an object.\n", Swig_name_decl(n));
+      }
+      Delete(outtypes);
+    }
+
     is_void_return = Cmp(c_return_type, "void") == 0;
     if (!is_void_return)
       Wrapper_add_localv(f, "jresult", c_return_type, "jresult = 0", NIL);
@@ -1676,6 +1723,12 @@ public:
     }
 
     /* Output argument output code */
+    if (guest_nout > 1) {
+      if (guest_list_from_result)
+	Printf(f->code, "    { jobject swig_first = jresult; jresult = SWIG_JavaGuestListNew(%d); SWIG_JavaGuestListAppend(jresult, swig_first); }\n", guest_nout);
+      else
+	Printf(f->code, "    jresult = SWIG_JavaGuestListNew(%d);\n", guest_nout);
+    }
     Printv(f->code, outarg, NIL);
 
     /* Output cleanup code */
@@ -3125,6 +3178,11 @@ public:
       Swig_warning(WARN_JAVA_TYPEMAP_JSTYPE_UNDEF, input_file, line_number, "No jstype typemap defined for %s\n", SwigType_str(t, 0));
     }
 
+    if (Getattr(n, "java:guest:outtype")) {
+      Clear(return_type);
+      Append(return_type, Getattr(n, "java:guest:outtype"));
+    }
+
     if (wrapping_member_flag && !enum_constant_flag) {
       // For wrapping member variables (Javabean setter)
       setter_flag = (Cmp(Getattr(n, "sym:name"), Swig_name_set(getNSpace(), Swig_name_member(0, getClassPrefix(), variable_name))) == 0);
@@ -3273,7 +3331,7 @@ public:
     int guest_post = Len(function_code) - 1;
 
     // Transform return type used in JNI function (in intermediary class) to type used in Java wrapper function (in proxy class)
-    if ((tm = Swig_typemap_lookup("javaout", n, "", 0))) {
+    if ((tm = guestOutJavaout(n)) || (tm = Swig_typemap_lookup("javaout", n, "", 0))) {
       addThrows(n, "tmap:javaout", n);
       bool is_pre_code = Len(pre_code) > 0;
       bool is_post_code = Len(post_code) > 0;
@@ -3352,6 +3410,13 @@ public:
     Delete(function_code);
     Delete(return_type);
     Delete(imcall);
+  }
+
+  // Guest mode: javaout of a function returning its output arguments
+  String *guestOutJavaout(Node *n) {
+    if (!Getattr(n, "java:guest:outtype"))
+      return 0;
+    return NewString("{\n    return $imclassname.swigCast($jnicall);\n  }");
   }
 
   // Guest mode: a guest value crosses the intermediary class as Object
@@ -3727,6 +3792,11 @@ public:
       Swig_warning(WARN_JAVA_TYPEMAP_JSTYPE_UNDEF, input_file, line_number, "No jstype typemap defined for %s\n", SwigType_str(t, 0));
     }
 
+    if (Getattr(n, "java:guest:outtype")) {
+      Clear(return_type);
+      Append(return_type, Getattr(n, "java:guest:outtype"));
+    }
+
     /* Change function name for global variables */
     if (proxy_flag && global_variable_flag) {
       // Capitalize the first letter in the variable to create a JavaBean type getter/setter function name
@@ -3836,7 +3906,7 @@ public:
     int guest_post = Len(function_code) - 1;
 
     // Transform return type used in JNI function (in intermediary class) to type used in Java wrapper function (in module class)
-    if ((tm = Swig_typemap_lookup("javaout", n, "", 0))) {
+    if ((tm = guestOutJavaout(n)) || (tm = Swig_typemap_lookup("javaout", n, "", 0))) {
       addThrows(n, "tmap:javaout", n);
       bool is_pre_code = Len(pre_code) > 0;
       bool is_post_code = Len(post_code) > 0;
