@@ -2148,7 +2148,10 @@ public:
       if (pure_virtual) {
         Printf(basecall, "Swig::DirectorPureVirtualException(\"%s::%s\")", classname, name);
       }
+      /* the upcall may come from a thread Julia does not know, or from C++ run GC-safe */
       Printf(w->code,
+        "  {\n"
+        "  SwigJlGcUnsafe __jl_enter;\n"
         "  jl_value_t *__self = swig_get_self();\n"
         "  jl_value_t *__f = Swig::swig_director_fn(\"%s\");\n", dispatch);
       Printf(w->code, "  if (__self && __f) {\n");
@@ -2174,7 +2177,7 @@ public:
         Printv(w->code, ret_marshal, NIL);
         Printf(w->code, "      return c_result;\n");
       }
-      Printf(w->code, "    }\n  }\n");
+      Printf(w->code, "    }\n  }\n  }\n");
       /* fall-through: pure -> throw, else call the C++ base impl */
       if (pure_virtual) {
         Printf(w->code, "  throw %s;\n", basecall);

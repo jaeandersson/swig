@@ -130,6 +130,32 @@ template <typename T> SWIGRUNTIME int swig_jl_check_int(jl_value_t* x) {
 %insert(runtime) %{
 /* pops the JL_GC_PUSH frame of its scope on every exit, C++ exceptions included */
 struct SwigJlGcPop { ~SwigJlGcPop() { JL_GC_POP(); } };
+/* lets the GC run during the scope, which must not touch Julia values (C++ that may block on threads calling into Julia) */
+struct SwigJlGcSafe {
+  jl_ptls_t ptls;
+  int8_t state;
+  SwigJlGcSafe() : ptls(jl_current_task->ptls), state(jl_gc_safe_enter(ptls)) {}
+  ~SwigJlGcSafe() { jl_gc_safe_leave(ptls, state); }
+};
+/* the calling thread's Julia state, adopting a thread Julia does not know; out of line, as the
+   const jl_get_pgcstack would otherwise keep returning the null of before the adoption */
+#if defined(__GNUC__)
+__attribute__((noinline))
+#elif defined(_MSC_VER)
+__declspec(noinline)
+#endif
+SWIGRUNTIME jl_ptls_t SWIG_JuliaThread(void) {
+  jl_gcframe_t **pgcstack = jl_get_pgcstack();
+  if (!pgcstack) pgcstack = jl_adopt_thread();
+  return container_of(pgcstack, jl_task_t, gcstack)->ptls;
+}
+/* runs Julia during the scope from any thread, also from inside a SwigJlGcSafe */
+struct SwigJlGcUnsafe {
+  jl_ptls_t ptls;
+  int8_t state;
+  SwigJlGcUnsafe() : ptls(SWIG_JuliaThread()), state(jl_gc_unsafe_enter(ptls)) {}
+  ~SwigJlGcUnsafe() { jl_gc_unsafe_leave(ptls, state); }
+};
 /* %append_output target: first output returned bare; further outputs grow a tuple. */
 SWIGRUNTIME jl_value_t* SWIG_AppendOutput(jl_value_t* cur, jl_value_t* x) {
   if (!cur) return x;
