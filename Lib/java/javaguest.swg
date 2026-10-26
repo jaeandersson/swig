@@ -160,10 +160,12 @@ SWIGRUNTIME jobject SWIG_JavaGuestNewPointerObj(void *ptr, swig_type_info *ty, i
 /* Cached JDK classes and methods */
 typedef struct {
   jclass Boolean, Number, Integer, Long, Short, Byte, Double, Float, String, List, Map, ArrayList, HashMap;
+  jclass doubles, longs, ints, booleans, objects, Entry, SimpleEntry;
   jmethodID booleanValue, longValue, doubleValue, Boolean_valueOf, Long_valueOf, Double_valueOf;
   jmethodID List_size, List_get, ArrayList_init, ArrayList_add;
   jmethodID Map_keySet, Map_get, HashMap_init, Map_put, Set_toArray;
   jmethodID String_getBytes, String_init;
+  jmethodID Entry_getKey, Entry_getValue, SimpleEntry_init;
   jstring utf8;
 } swig_java_guest_jdk;
 
@@ -190,7 +192,14 @@ SWIGRUNTIME swig_java_guest_jdk SWIG_JavaGuestJDKInit(JNIEnv *jenv) {
     j.List = SWIG_JavaGuestClass(jenv, "java/util/List");
     j.Map = SWIG_JavaGuestClass(jenv, "java/util/Map");
     j.ArrayList = SWIG_JavaGuestClass(jenv, "java/util/ArrayList");
-    j.HashMap = SWIG_JavaGuestClass(jenv, "java/util/HashMap");
+    j.HashMap = SWIG_JavaGuestClass(jenv, "java/util/LinkedHashMap");
+    j.doubles = SWIG_JavaGuestClass(jenv, "[D");
+    j.longs = SWIG_JavaGuestClass(jenv, "[J");
+    j.ints = SWIG_JavaGuestClass(jenv, "[I");
+    j.booleans = SWIG_JavaGuestClass(jenv, "[Z");
+    j.objects = SWIG_JavaGuestClass(jenv, "[Ljava/lang/Object;");
+    j.Entry = SWIG_JavaGuestClass(jenv, "java/util/Map$Entry");
+    j.SimpleEntry = SWIG_JavaGuestClass(jenv, "java/util/AbstractMap$SimpleImmutableEntry");
     jclass set = SWIG_JavaGuestClass(jenv, "java/util/Set");
     j.booleanValue = jenv->GetMethodID(j.Boolean, "booleanValue", "()Z");
     j.longValue = jenv->GetMethodID(j.Number, "longValue", "()J");
@@ -209,6 +218,9 @@ SWIGRUNTIME swig_java_guest_jdk SWIG_JavaGuestJDKInit(JNIEnv *jenv) {
     j.Set_toArray = jenv->GetMethodID(set, "toArray", "()[Ljava/lang/Object;");
     j.String_getBytes = jenv->GetMethodID(j.String, "getBytes", "(Ljava/lang/String;)[B");
     j.String_init = jenv->GetMethodID(j.String, "<init>", "([BLjava/lang/String;)V");
+    j.Entry_getKey = jenv->GetMethodID(j.Entry, "getKey", "()Ljava/lang/Object;");
+    j.Entry_getValue = jenv->GetMethodID(j.Entry, "getValue", "()Ljava/lang/Object;");
+    j.SimpleEntry_init = jenv->GetMethodID(j.SimpleEntry, "<init>", "(Ljava/lang/Object;Ljava/lang/Object;)V");
     jstring u = jenv->NewStringUTF("UTF-8");
     j.utf8 = static_cast<jstring>(jenv->NewGlobalRef(u));
     jenv->DeleteLocalRef(u);
@@ -284,7 +296,7 @@ SWIGRUNTIME void SWIG_JavaGuestListAppend(jobject list, jobject item) {
   SWIG_JavaGuestCheck(jenv);
 }
 
-/* java.util.Map */
+/* java.util.Map (LinkedHashMap: keeps C++ order) */
 SWIGRUNTIME bool SWIG_JavaGuestIsMap(jobject obj) {
   JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
   return obj && jenv->IsInstanceOf(obj, SWIG_JavaGuestJDK(jenv).Map);
@@ -326,6 +338,121 @@ SWIGRUNTIME jobject SWIG_JavaGuestAppendOutput(jobject result, jobject obj) {
   if (!result) return obj;
   SWIG_JavaGuestListAppend(result, obj);
   return result;
+}
+
+/* Primitive arrays <-> std::vector: double[], long[] or int[], boolean[] */
+#include <vector>
+SWIGRUNTIME bool SWIG_JavaGuestIsDoubles(jobject obj) { return SWIG_JavaGuestIsInstance(obj, SWIG_JavaGuestJDK(SWIG_JavaGuestEnvChecked()).doubles); }
+SWIGRUNTIME bool SWIG_JavaGuestIsLongs(jobject obj) {
+  const swig_java_guest_jdk &j = SWIG_JavaGuestJDK(SWIG_JavaGuestEnvChecked());
+  return SWIG_JavaGuestIsInstance(obj, j.longs) || SWIG_JavaGuestIsInstance(obj, j.ints);
+}
+SWIGRUNTIME bool SWIG_JavaGuestIsBooleans(jobject obj) { return SWIG_JavaGuestIsInstance(obj, SWIG_JavaGuestJDK(SWIG_JavaGuestEnvChecked()).booleans); }
+SWIGRUNTIME std::vector<double> SWIG_JavaGuestDoubles(jobject obj) {
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  jdoubleArray a = static_cast<jdoubleArray>(obj);
+  std::vector<double> r(jenv->GetArrayLength(a));
+  if (!r.empty()) jenv->GetDoubleArrayRegion(a, 0, (jsize)r.size(), &r[0]);
+  return r;
+}
+SWIGRUNTIME std::vector<long long> SWIG_JavaGuestLongs(jobject obj) {
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  if (SWIG_JavaGuestIsInstance(obj, SWIG_JavaGuestJDK(jenv).ints)) {
+    jintArray a = static_cast<jintArray>(obj);
+    std::vector<jint> t(jenv->GetArrayLength(a));
+    if (!t.empty()) jenv->GetIntArrayRegion(a, 0, (jsize)t.size(), &t[0]);
+    return std::vector<long long>(t.begin(), t.end());
+  }
+  jlongArray a = static_cast<jlongArray>(obj);
+  std::vector<jlong> t(jenv->GetArrayLength(a));
+  if (!t.empty()) jenv->GetLongArrayRegion(a, 0, (jsize)t.size(), &t[0]);
+  return std::vector<long long>(t.begin(), t.end());
+}
+SWIGRUNTIME std::vector<bool> SWIG_JavaGuestBooleans(jobject obj) {
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  jbooleanArray a = static_cast<jbooleanArray>(obj);
+  std::vector<jboolean> t(jenv->GetArrayLength(a));
+  if (!t.empty()) jenv->GetBooleanArrayRegion(a, 0, (jsize)t.size(), &t[0]);
+  return std::vector<bool>(t.begin(), t.end());
+}
+SWIGRUNTIME jobject SWIG_JavaGuestNewDoubles(const std::vector<double> &v) {
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  jdoubleArray r = jenv->NewDoubleArray((jsize)v.size());
+  if (!v.empty()) jenv->SetDoubleArrayRegion(r, 0, (jsize)v.size(), &v[0]);
+  SWIG_JavaGuestCheck(jenv);
+  return r;
+}
+SWIGRUNTIME jobject SWIG_JavaGuestNewLongs(const std::vector<long long> &v) {
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  std::vector<jlong> t(v.begin(), v.end());
+  jlongArray r = jenv->NewLongArray((jsize)t.size());
+  if (!t.empty()) jenv->SetLongArrayRegion(r, 0, (jsize)t.size(), &t[0]);
+  SWIG_JavaGuestCheck(jenv);
+  return r;
+}
+SWIGRUNTIME jobject SWIG_JavaGuestNewBooleans(const std::vector<bool> &v) {
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  std::vector<jboolean> t(v.begin(), v.end());
+  jbooleanArray r = jenv->NewBooleanArray((jsize)t.size());
+  if (!t.empty()) jenv->SetBooleanArrayRegion(r, 0, (jsize)t.size(), &t[0]);
+  SWIG_JavaGuestCheck(jenv);
+  return r;
+}
+/* Array of n elements of class element (e.g. double[][] from the double[] class) */
+SWIGRUNTIME jobject SWIG_JavaGuestNewArrayOf(jclass element, jsize n) {
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  jobjectArray r = jenv->NewObjectArray(n, element, 0);
+  SWIG_JavaGuestCheck(jenv);
+  return r;
+}
+/* Sets and releases element i */
+SWIGRUNTIME void SWIG_JavaGuestArraySet(jobject array, jsize i, jobject value) {
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  jenv->SetObjectArrayElement(static_cast<jobjectArray>(array), i, value);
+  if (value) jenv->DeleteLocalRef(value);
+  SWIG_JavaGuestCheck(jenv);
+}
+
+/* Sequences: Object[] (including arrays of arrays) or java.util.List */
+SWIGRUNTIME bool SWIG_JavaGuestIsSequence(jobject obj) {
+  const swig_java_guest_jdk &j = SWIG_JavaGuestJDK(SWIG_JavaGuestEnvChecked());
+  return SWIG_JavaGuestIsInstance(obj, j.objects) || SWIG_JavaGuestIsInstance(obj, j.List);
+}
+SWIGRUNTIME jint SWIG_JavaGuestSequenceSize(jobject obj) {
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  if (jenv->IsInstanceOf(obj, SWIG_JavaGuestJDK(jenv).objects)) return jenv->GetArrayLength(static_cast<jobjectArray>(obj));
+  return SWIG_JavaGuestListSize(obj);
+}
+/* Local reference */
+SWIGRUNTIME jobject SWIG_JavaGuestSequenceGet(jobject obj, jint i) {
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  if (jenv->IsInstanceOf(obj, SWIG_JavaGuestJDK(jenv).objects)) {
+    jobject r = jenv->GetObjectArrayElement(static_cast<jobjectArray>(obj), i);
+    SWIG_JavaGuestCheck(jenv);
+    return r;
+  }
+  return SWIG_JavaGuestListGet(obj, i);
+}
+
+/* java.util.Map.Entry, e.g. for pairs */
+SWIGRUNTIME bool SWIG_JavaGuestIsEntry(jobject obj) { return SWIG_JavaGuestIsInstance(obj, SWIG_JavaGuestJDK(SWIG_JavaGuestEnvChecked()).Entry); }
+/* Local reference to the key or the value */
+SWIGRUNTIME jobject SWIG_JavaGuestEntryGet(jobject obj, bool key) {
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  const swig_java_guest_jdk &j = SWIG_JavaGuestJDK(jenv);
+  jobject r = jenv->CallObjectMethod(obj, key ? j.Entry_getKey : j.Entry_getValue);
+  SWIG_JavaGuestCheck(jenv);
+  return r;
+}
+/* Releases key and value */
+SWIGRUNTIME jobject SWIG_JavaGuestNewEntry(jobject key, jobject value) {
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  const swig_java_guest_jdk &j = SWIG_JavaGuestJDK(jenv);
+  jobject r = jenv->NewObject(j.SimpleEntry, j.SimpleEntry_init, key, value);
+  if (key) jenv->DeleteLocalRef(key);
+  if (value) jenv->DeleteLocalRef(value);
+  SWIG_JavaGuestCheck(jenv);
+  return r;
 }
 
 SWIGRUNTIME void SWIG_JavaGuestRelease(jobject obj) {
