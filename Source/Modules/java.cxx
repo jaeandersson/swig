@@ -17,6 +17,10 @@
 #include <limits.h>		// for INT_MAX
 #include <ctype.h>
 #include "javadoc.h"
+#include <string>
+#include <vector>
+#include <map>
+#include <algorithm>
 
 /* Hash type used for upcalls from C/C++ */
 typedef DOH UpcallData;
@@ -50,6 +54,7 @@ class JAVA:public Language {
   bool member_func_flag;	// flag set when wrapping a member function
   bool doxygen;			//flag for converting found doxygen to javadoc
   bool comment_creation_chatter; //flag for getting information about where comments were created in java.cxx
+  bool guest_flag;		// Guest-object mode (%pragma(java) guestobjects, see javaguest.swg)
   
   String *imclass_name;		// intermediary class name
   String *module_class_name;	// module class name
@@ -85,6 +90,11 @@ class JAVA:public Language {
   String *imclass_directors;	// Intermediate class director code
   String *destructor_call;	//C++ destructor call if any
   String *destructor_throws_clause;	//C++ destructor throws clause if any
+  String *guest_register;	// Guest-object mode: proxy class registrations for the type table
+  Hash *guest_pending;		// Guest-object mode: deferred proxy methods of the current class, by name
+  List *guest_pending_keys;	// ... in order of appearance
+  Hash *guest_module_pending;	// ... and of the module class
+  List *guest_module_pending_keys;
 
   // Director method stuff:
   List *dmethods_seq;
@@ -128,6 +138,7 @@ public:
       member_func_flag(false),
       doxygen(false),
       comment_creation_chatter(false),
+      guest_flag(false),
       imclass_name(NULL),
       module_class_name(NULL),
       constants_interface_name(NULL),
@@ -162,6 +173,11 @@ public:
       imclass_directors(NULL),
       destructor_call(NULL),
       destructor_throws_clause(NULL),
+      guest_register(NULL),
+      guest_pending(NULL),
+      guest_pending_keys(NULL),
+      guest_module_pending(NULL),
+      guest_module_pending_keys(NULL),
       dmethods_seq(NULL),
       dmethods_table(NULL),
       n_dmethods(0),
@@ -404,6 +420,9 @@ public:
 
     swig_types_hash = NewHash();
     filenames_list = NewList();
+    guest_register = NewString("");
+    guest_module_pending = NewHash();
+    guest_module_pending_keys = NewList();
 
     // Make the intermediary class and module class names. The intermediary class name can be set in the module directive.
     if (!imclass_name) {
@@ -505,6 +524,9 @@ public:
     /* Emit code */
     Language::top(n);
 
+    if (guest_flag)
+      guestFlush(module_class_code, guest_module_pending, guest_module_pending_keys);
+
     if (Swig_directors_enabled()) {
       // Insert director runtime into the f_runtime file (make it occur before %header section)
       Swig_insert_file("director_common.swg", f_runtime);
@@ -553,7 +575,7 @@ public:
       if (Len(imclass_directors) > 0)
 	Printv(f_im, "\n", imclass_directors, NIL);
 
-      if (n_dmethods > 0) {
+      if (n_dmethods > 0 || guest_flag) {
 	Putc('\n', f_im);
 	Printf(f_im, "  private final static native void swig_module_init();\n");
 	Printf(f_im, "  static {\n");
@@ -660,11 +682,24 @@ public:
     if (upcasts_code)
       Printv(f_wrappers, upcasts_code, NIL);
 
-    emitDirectorUpcalls();
+    if (!guest_flag)
+      emitDirectorUpcalls(f_wrappers);
 
     Printf(f_wrappers, "#ifdef __cplusplus\n");
     Printf(f_wrappers, "}\n");
     Printf(f_wrappers, "#endif\n");
+
+    if (guest_flag) {
+      // Type table, then the init function opened in javaguest.swg, then swig_module_init calling it
+      SwigType_emit_type_table(f_runtime, f_wrappers);
+      Replaceall(f_init, "SWIG_JAVA_GUEST_REGISTER_TYPES;", guest_register);
+      Printf(f_init, "}\n\n");
+      Printf(f_init, "#ifdef __cplusplus\nextern \"C\" {\n#endif\n");
+      emitDirectorUpcalls(f_init);
+      Printf(f_init, "#ifdef __cplusplus\n}\n#endif\n");
+    }
+    Delete(guest_register);
+    guest_register = NULL;
 
     // Output a Java type wrapper class for each SWIG type
     for (Iterator swig_type = First(swig_types_hash); swig_type.key; swig_type = Next(swig_type)) {
@@ -775,6 +810,540 @@ public:
     Delete(f_runtime);
     Delete(f_begin);
     return SWIG_OK;
+  }
+
+  /* -----------------------------------------------------------------------------
+   * Guest-object mode: deferred proxy methods
+   *
+   * Proxy methods, constructors and module functions are recorded as header,
+   * parameters and body, and emitted when their class (or the module) ends.
+   * Overloads whose Java signatures are equal after erasure are merged into one
+   * method that is dispatched in C++ on the typecheck typemaps.  Methods with a
+   * parameter whose jstype typemap has a widen attribute get variants taking
+   * the alternatives; of equal signatures the lowest typecheck precedence wins.
+   * ----------------------------------------------------------------------------- */
+
+  void guestRecordParam(List *params, Parm *p, String *type, String *name) {
+    Hash *h = NewHash();
+    Setattr(h, "type", Copy(type));
+    Setattr(h, "name", Copy(name));
+    String *jtype = Getattr(p, "tmap:jtype");
+    if (jtype)
+      Setattr(h, "jtype", Copy(jtype));
+    // %typemap(jstype, widen="Alt1,Alt2"): Java types this parameter also takes
+    String *widen = Getattr(p, "tmap:jstype:widen");
+    if (widen) {
+      List *alts = NewList();
+      List *parts = Split(widen, ',', -1);
+      for (Iterator a = First(parts); a.item; a = Next(a)) {
+	String *alt = Copy(a.item);
+	Replaceall(alt, " ", "");
+	if (Len(alt))
+	  Append(alts, alt);
+	Delete(alt);
+      }
+      Setattr(h, "widen", alts);
+      Delete(alts);
+      Delete(parts);
+    }
+    Setattr(h, "parm", p);
+    Append(params, h);
+    Delete(h);
+  }
+
+  void guestDefer(Hash *pending, List *keys, Node *n, const char *kind, String *name, bool is_static, String *code, int pre, int post, List *params, String *imcall, String *ret) {
+    String *key = NewStringf("%s:%s:%d", kind, name, is_static ? 1 : 0);
+    List *entries = Getattr(pending, key);
+    if (!entries) {
+      entries = NewList();
+      Setattr(pending, key, entries);
+      Append(keys, key);
+      Delete(entries);
+    }
+    Hash *e = NewHash();
+    Setattr(e, "node", n);
+    Setattr(e, "kind", kind);
+    Setattr(e, "name", Copy(name));
+    Setattr(e, "pre", NewStringWithSize(Char(code), pre));
+    Setattr(e, "post", NewString(Char(code) + post));
+    Setattr(e, "params", params);
+    Setattr(e, "imcall", Copy(imcall));
+    if (ret)
+      Setattr(e, "ret", Copy(ret));
+    if (is_static)
+      SetFlag(e, "static");
+    Append(entries, e);
+    Delete(e);
+    Delete(key);
+  }
+
+  static std::string guestNoSpace(const String *t) {
+    std::string r;
+    for (const char *c = Char(t); *c; ++c)
+      if (!isspace((unsigned char)*c))
+	r += *c;
+    return r;
+  }
+
+  // Raw type: generic arguments removed
+  static std::string guestErase(const std::string &t) {
+    std::string r;
+    int depth = 0;
+    for (char c : t) {
+      if (c == '<')
+	++depth;
+      else if (c == '>')
+	--depth;
+      else if (depth == 0)
+	r += c;
+    }
+    return r;
+  }
+
+  // Generic arguments replaced by wildcards
+  static std::string guestWildcard(const std::string &t) {
+    std::string r;
+    int depth = 0;
+    for (char c : t) {
+      if (c == '<') {
+	if (depth == 0)
+	  r += "<?";
+	++depth;
+      } else if (c == '>') {
+	--depth;
+	if (depth == 0)
+	  r += '>';
+      } else if (depth == 0) {
+	r += c;
+      } else if (depth == 1 && c == ',') {
+	r += ",?";
+      }
+    }
+    return r;
+  }
+
+  // Qualified identifiers and single punctuation characters
+  static std::vector<std::string> guestTokens(const std::string &t) {
+    std::vector<std::string> r;
+    for (size_t i = 0; i < t.size();) {
+      char c = t[i];
+      if (isalnum((unsigned char)c) || c == '_' || c == '.' || c == '$') {
+	size_t j = i;
+	while (j < t.size() && (isalnum((unsigned char)t[j]) || t[j] == '_' || t[j] == '.' || t[j] == '$'))
+	  ++j;
+	r.push_back(t.substr(i, j - i));
+	i = j;
+      } else {
+	r.push_back(std::string(1, c));
+	++i;
+      }
+    }
+    return r;
+  }
+
+  static std::string guestErasedSig(Hash *e) {
+    std::string sig;
+    for (Iterator p = First(Getattr(e, "params")); p.item; p = Next(p))
+      sig += guestErase(guestNoSpace(Getattr(p.item, "type"))) + ",";
+    return sig;
+  }
+
+  static std::string guestSig(Hash *e) {
+    std::string sig;
+    for (Iterator p = First(Getattr(e, "params")); p.item; p = Next(p))
+      sig += guestNoSpace(Getattr(p.item, "type")) + ",";
+    return sig;
+  }
+
+  static int guestPrecedence(Hash *param) {
+    Parm *p = Getattr(param, "parm");
+    String *pr = Getattr(p, "tmap:typecheck:precedence");
+    if (!pr) {
+      Swig_typemap_attach_parms("typecheck", p, 0);
+      pr = Getattr(p, "tmap:typecheck:precedence");
+    }
+    return pr ? atoi(Char(pr)) : 0;
+  }
+
+  static std::vector<int> guestPrecVec(Hash *e) {
+    std::vector<int> r;
+    for (Iterator p = First(Getattr(e, "params")); p.item; p = Next(p))
+      r.push_back(guestPrecedence(p.item));
+    return r;
+  }
+
+  static String *guestCode(Hash *e) {
+    String *code = Copy(Getattr(e, "pre"));
+    int i = 0;
+    for (Iterator p = First(Getattr(e, "params")); p.item; p = Next(p), ++i) {
+      if (i)
+	Printf(code, ", ");
+      Printf(code, "%s %s", Getattr(p.item, "type"), Getattr(p.item, "name"));
+    }
+    Append(code, Getattr(e, "post"));
+    return code;
+  }
+
+  // Entry with the same attributes and its own copy of the parameters
+  static Hash *guestCopyEntry(Hash *e) {
+    Hash *c = Copy(e);
+    List *params = NewList();
+    for (Iterator p = First(Getattr(e, "params")); p.item; p = Next(p)) {
+      Hash *h = Copy(p.item);
+      Append(params, h);
+      Delete(h);
+    }
+    Setattr(c, "params", params);
+    Delete(params);
+    return c;
+  }
+
+  void guestFlush(String *target, Hash *pending, List *keys) {
+    for (Iterator k = First(keys); k.item; k = Next(k)) {
+      List *merged = guestMerge(Getattr(pending, k.item));
+      List *all = guestWiden(merged);
+      if (Len(all) > 0)
+	guestJavadoc(Getitem(all, 0));
+      for (Iterator e = First(all); e.item; e = Next(e)) {
+	String *code = guestCode(e.item);
+	Printv(target, code, NIL);
+	Delete(code);
+      }
+      Delete(all);
+      Delete(merged);
+    }
+    Clear(pending);
+    Clear(keys);
+  }
+
+  // %feature("customdoc"): the overload set's documentation as Javadoc on its first method
+  void guestJavadoc(Hash *e) {
+    Node *n = Getattr(e, "node");
+    if (!checkAttribute(n, "feature:customdoc", "1"))
+      return;
+    if (Getattr(n, "sym:overloaded"))
+      n = Getattr(n, "sym:overloaded");
+    String *doc = Swig_document_function(n);
+    if (!doc)
+      return;
+    while (Strstr(doc, "\n\n\n"))
+      Replaceall(doc, "\n\n\n", "\n\n");
+    Chop(doc);
+    while (Len(doc) > 0 && *Char(doc) == '\n')
+      Delitem(doc, 0);
+    if (Len(doc) == 0)
+      return;
+    Replaceall(doc, "&", "&amp;");
+    Replaceall(doc, "<", "&lt;");
+    Replaceall(doc, ">", "&gt;");
+    Replaceall(doc, "@", "&#64;");
+    Replaceall(doc, "*/", "*&#47;");
+    Replaceall(doc, "\n", "\n   * ");
+    String *javadoc = NewStringf("  /**\n   * <pre>\n   * %s\n   * </pre>\n   */\n", doc);
+    Replaceall(javadoc, "   * \n", "   *\n");
+    String *pre = Copy(Getattr(e, "pre"));
+    Insert(pre, 0, javadoc);
+    Setattr(e, "pre", pre);
+    Delete(pre);
+    Delete(javadoc);
+    Delete(doc);
+  }
+
+  List *guestMerge(List *entries) {
+    List *out = NewList();
+    int n = Len(entries);
+    std::vector<bool> used(n, false);
+    for (int i = 0; i < n; ++i) {
+      if (used[i])
+	continue;
+      Hash *ei = Getitem(entries, i);
+      std::string sig = guestErasedSig(ei);
+      std::vector<Hash *> group(1, ei);
+      used[i] = true;
+      for (int j = i + 1; j < n; ++j) {
+	if (!used[j] && guestErasedSig(Getitem(entries, j)) == sig) {
+	  group.push_back(Getitem(entries, j));
+	  used[j] = true;
+	}
+      }
+      if (group.size() == 1) {
+	Append(out, ei);
+      } else {
+	Hash *m = guestMergeGroup(group);
+	Append(out, m);
+	Delete(m);
+      }
+    }
+    return out;
+  }
+
+  static bool guestPrecLess(Hash *a, Hash *b) {
+    return guestPrecVec(a) < guestPrecVec(b);
+  }
+
+  // Signature string with the function name replaced by @, to compare members
+  static std::string guestAnonymous(const String *code, const String *name) {
+    String *c = Copy(code);
+    Replace(c, name, "@", DOH_REPLACE_ID | DOH_REPLACE_FIRST);
+    std::string r = Char(c);
+    Delete(c);
+    return r;
+  }
+
+  Hash *guestMergeGroup(std::vector<Hash *> group) {
+    std::stable_sort(group.begin(), group.end(), guestPrecLess);
+    Hash *e0 = group[0];
+    Node *n0 = Getattr(e0, "node");
+    const char *kind = Char(Getattr(e0, "kind"));
+    bool is_ctor = strcmp(kind, "c") == 0;
+
+    // Mergeable: same C and intermediary signatures, no Java pre/post code
+    bool ok = true;
+    for (size_t i = 0; i < group.size() && ok; ++i) {
+      Node *ni = Getattr(group[i], "node");
+      if (!Getattr(ni, "java:guest:cdef") || GetFlag(ni, "java:guest:nomerge"))
+	ok = false;
+      else if (i > 0)
+	ok = guestAnonymous(Getattr(ni, "java:guest:cdef"), Getattr(ni, "wrap:name")) == guestAnonymous(Getattr(n0, "java:guest:cdef"), Getattr(n0, "wrap:name"))
+	  && guestAnonymous(Getattr(ni, "java:guest:imdecl"), Getattr(ni, "java:guest:imname")) == guestAnonymous(Getattr(n0, "java:guest:imdecl"), Getattr(n0, "java:guest:imname"));
+    }
+    if (!ok) {
+      for (size_t i = 1; i < group.size(); ++i) {
+	Node *ni = Getattr(group[i], "node");
+	Swig_warning(WARN_LANG_OVERLOAD_IGNORED, Getfile(ni), Getline(ni), "Overloaded method %s has the same Java erasure as %s and cannot be merged, ignored.\n",
+		     Swig_name_decl(ni), Swig_name_decl(n0));
+      }
+      return Copy(e0);
+    }
+
+    // Java types per member: parameters, then the return type
+    size_t np = (size_t)Len(Getattr(e0, "params"));
+    std::vector<std::vector<std::string> > types(group.size());
+    for (size_t i = 0; i < group.size(); ++i) {
+      for (Iterator p = First(Getattr(group[i], "params")); p.item; p = Next(p))
+	types[i].push_back(guestNoSpace(Getattr(p.item, "type")));
+      String *ret = Getattr(group[i], "ret");
+      types[i].push_back(ret ? guestNoSpace(ret) : std::string());
+    }
+
+    // One type variable T if all members differ only by one class name each
+    std::string x0;
+    std::vector<std::vector<bool> > var(np + 1);
+    bool typevar = true;
+    for (size_t k = 0; k <= np; ++k)
+      var[k] = std::vector<bool>(guestTokens(types[0][k]).size(), false);
+    for (size_t i = 1; i < group.size() && typevar; ++i) {
+      std::string xi;
+      for (size_t k = 0; k <= np && typevar; ++k) {
+	std::vector<std::string> a = guestTokens(types[0][k]), b = guestTokens(types[i][k]);
+	if (a.size() != b.size()) {
+	  typevar = false;
+	  break;
+	}
+	for (size_t j = 0; j < a.size(); ++j) {
+	  if (a[j] == b[j])
+	    continue;
+	  if ((!x0.empty() && a[j] != x0) || (!xi.empty() && b[j] != xi) || !(isalpha((unsigned char)a[j][0]) && isalpha((unsigned char)b[j][0]))) {
+	    typevar = false;
+	    break;
+	  }
+	  x0 = a[j];
+	  xi = b[j];
+	  var[k][j] = true;
+	}
+      }
+    }
+    if (x0.empty())
+      typevar = false;
+
+    // Merged Java types
+    std::vector<std::string> mtypes(np + 1);
+    bool changed_ret = false;
+    for (size_t k = 0; k <= np; ++k) {
+      bool same = true;
+      for (size_t i = 1; i < group.size(); ++i)
+	same = same && types[i][k] == types[0][k];
+      if (same) {
+	mtypes[k] = types[0][k];
+      } else if (typevar) {
+	std::vector<std::string> a = guestTokens(types[0][k]);
+	for (size_t j = 0; j < a.size(); ++j)
+	  mtypes[k] += var[k][j] ? std::string("T") : a[j];
+      } else {
+	bool same_raw = true;
+	for (size_t i = 1; i < group.size(); ++i)
+	  same_raw = same_raw && guestErase(types[i][k]) == guestErase(types[0][k]);
+	mtypes[k] = (k < np || same_raw) ? guestWildcard(types[0][k]) : std::string("Object");
+      }
+      if (k == np && !same)
+	changed_ret = true;
+    }
+
+    // C++ dispatcher with the members' JNI signature
+    String *imname0 = Getattr(n0, "java:guest:imname");
+    String *disp = NewStringf("%sSWIGMerged", imname0);
+    String *jdisp = makeValidJniName(disp);
+    String *wdisp = Swig_name_wrapper(jdisp);
+    String *wname0 = Getattr(n0, "wrap:name");
+    String *cargs = Getattr(n0, "java:guest:cargs");
+    bool is_void = Cmp(Getattr(n0, "java:guest:void"), "1") == 0;
+    Wrapper *w = NewWrapper();
+    String *def = Copy(Getattr(n0, "java:guest:cdef"));
+    Replace(def, wname0, wdisp, DOH_REPLACE_ID | DOH_REPLACE_FIRST);
+    Printv(w->def, def, NIL);
+    Printf(w->code, "try {\n");
+    String *protos = NewString("");
+    for (size_t i = 0; i < group.size(); ++i) {
+      Node *ni = Getattr(group[i], "node");
+      ParmList *wp = Getattr(ni, "wrap:parms");
+      Swig_typemap_attach_parms("typecheck", wp, 0);
+      Printf(w->code, "{\nint _v = 1;\n");
+      for (Parm *p = wp; p;) {
+	if (checkAttribute(p, "tmap:in:numinputs", "0")) {
+	  p = Getattr(p, "tmap:in:next");
+	  continue;
+	}
+	String *tc = Getattr(p, "tmap:typecheck");
+	String *input = Getattr(p, "emit:input");
+	if (tc && Len(tc) && input) {
+	  String *c = Copy(tc);
+	  Replaceid(c, Getattr(p, "lname"), "_v");
+	  Replaceall(c, "$implicitconv", "0");
+	  Replaceall(c, "$input", input);
+	  Printf(w->code, "if (_v) {\n%s\n}\n", c);
+	  Delete(c);
+	}
+	p = Getattr(p, "tmap:in:next") ? Getattr(p, "tmap:in:next") : nextSibling(p);
+      }
+      if (is_void)
+	Printf(w->code, "if (_v) {\n%s(%s);\nreturn;\n}\n}\n", Getattr(ni, "wrap:name"), cargs);
+      else
+	Printf(w->code, "if (_v) return %s(%s);\n}\n", Getattr(ni, "wrap:name"), cargs);
+      Printf(protos, "\\n  %s", Swig_name_decl(ni));
+    }
+    Printf(w->code, "} SWIG_JAVA_GUEST_CATCH(%s)\n", is_void ? "" : "0");
+    Printf(w->code, "SWIG_JavaGuestThrow(jenv, SWIG_TypeError, \"No matching overload of '%s'. Candidates:%s\");\n", Getattr(e0, "name"), protos);
+    if (!is_void)
+      Printf(w->code, "return 0;\n");
+    Printf(w->code, "}\n");
+    Wrapper_print(w, f_wrappers);
+    DelWrapper(w);
+
+    // Intermediary class declaration of the dispatcher
+    String *imdecl = Copy(Getattr(n0, "java:guest:imdecl"));
+    Replace(imdecl, imname0, disp, DOH_REPLACE_ID | DOH_REPLACE_FIRST);
+    Append(imclass_class_code, imdecl);
+
+    // Java method calling the dispatcher
+    String *imcall = Copy(Getattr(e0, "imcall"));
+    Replace(imcall, imname0, disp, DOH_REPLACE_ID | DOH_REPLACE_FIRST);
+    Hash *m = guestCopyEntry(e0);
+    int k = 0;
+    for (Iterator p = First(Getattr(m, "params")); p.item; p = Next(p), ++k)
+      Setattr(p.item, "type", NewString(mtypes[k].c_str()));
+    String *bound = Getattr(n0, "feature:java:typebound");
+    String *tparams = typevar ? (bound ? NewStringf("<T extends %s> ", bound) : NewString("<T> ")) : NewString("");
+    const String *methodmods = Getattr(n0, "feature:java:methodmodifiers");
+    methodmods = methodmods ? methodmods : (is_public(n0) ? public_string : protected_string);
+    String *pre = NewString("");
+    String *post = 0;
+    if (is_ctor) {
+      Printf(pre, "  %s %s%s(", methodmods, tparams, Getattr(e0, "name"));
+      post = Copy(Getattr(e0, "post"));
+      Replace(post, Getattr(e0, "imcall"), imcall, DOH_REPLACE_FIRST);
+    } else {
+      if (changed_ret)
+	Printf(pre, "  @SuppressWarnings(\"unchecked\")\n");
+      Printf(pre, "  %s %s%s%s %s(", methodmods, GetFlag(e0, "static") ? "static " : "", tparams, mtypes[np].c_str(), Getattr(e0, "name"));
+      if (changed_ret) {
+	post = NewStringf(") {\n    return (%s)%s;\n  }\n\n", mtypes[np].c_str(), imcall);
+      } else {
+	post = Copy(Getattr(e0, "post"));
+	Replace(post, Getattr(e0, "imcall"), imcall, DOH_REPLACE_FIRST);
+      }
+      Setattr(m, "ret", NewString(mtypes[np].c_str()));
+    }
+    Setattr(m, "pre", pre);
+    Setattr(m, "post", post);
+    Setattr(m, "imcall", imcall);
+    SetFlag(m, "merged");
+    Delete(pre);
+    Delete(post);
+    Delete(tparams);
+    Delete(imcall);
+    Delete(imdecl);
+    Delete(protos);
+    Delete(def);
+    Delete(wdisp);
+    Delete(jdisp);
+    Delete(disp);
+    return m;
+  }
+
+  List *guestWiden(List *entries) {
+    struct Cand {
+      Hash *e;
+      bool widened;
+      std::vector<int> prec;
+      std::string sig;
+    };
+    std::vector<Cand> cands;
+    for (Iterator it = First(entries); it.item; it = Next(it)) {
+      Hash *e = it.item;
+      Cand c = { e, false, guestPrecVec(e), guestSig(e) };
+      cands.push_back(c);
+      // Parameters crossing as Object whose jstype typemap lists alternatives
+      std::vector<int> pos;
+      std::vector<List *> alts;
+      int k = 0;
+      for (Iterator p = First(Getattr(e, "params")); p.item; p = Next(p), ++k) {
+	List *a = Getattr(p.item, "widen");
+	if (a && Len(a) && guestObjectJtype(Getattr(p.item, "jtype"))) {
+	  pos.push_back(k);
+	  alts.push_back(a);
+	}
+      }
+      if (pos.empty())
+	continue;
+      size_t total = 1;
+      for (size_t j = 0; j < alts.size(); ++j)
+	total *= (size_t)(Len(alts[j]) + 1);
+      if (total > 257) {
+	Node *n = Getattr(e, "node");
+	Swig_warning(WARN_LANG_OVERLOAD_IGNORED, Getfile(n), Getline(n), "Too many widen variants for %s, none generated.\n", Swig_name_decl(n));
+	continue;
+      }
+      for (size_t combo = 1; combo < total; ++combo) {
+	Hash *v = guestCopyEntry(e);
+	size_t rest = combo;
+	for (size_t j = 0; j < alts.size(); ++j) {
+	  size_t choice = rest % (size_t)(Len(alts[j]) + 1);
+	  rest /= (size_t)(Len(alts[j]) + 1);
+	  if (choice)
+	    Setattr(Getitem(Getattr(v, "params"), pos[j]), "type", Copy(Getitem(alts[j], (int)choice - 1)));
+	}
+	Cand cv = { v, true, c.prec, guestSig(v) };
+	cands.push_back(cv);
+      }
+    }
+    // Of equal signatures keep originals, else the lowest precedence
+    std::map<std::string, size_t> best;
+    for (size_t i = 0; i < cands.size(); ++i) {
+      std::map<std::string, size_t>::iterator b = best.find(cands[i].sig);
+      if (b == best.end()) {
+	best[cands[i].sig] = i;
+      } else {
+	Cand &o = cands[b->second];
+	if (o.widened && (!cands[i].widened || cands[i].prec < o.prec))
+	  b->second = i;
+      }
+    }
+    List *out = NewList();
+    for (int pass = 0; pass < 2; ++pass)
+      for (size_t i = 0; i < cands.size(); ++i)
+	if (cands[i].widened == (pass == 1) && (!cands[i].widened || best[cands[i].sig] == i))
+	  Append(out, cands[i].e);
+    return out;
   }
 
   /* -----------------------------------------------------------------------------
@@ -925,6 +1494,8 @@ public:
 
     Printv(f->code, "    (void)jenv;\n", NIL);
     Printv(f->code, "    (void)jcls;\n", NIL);
+    if (guest_flag)
+      Printv(f->code, "  try {\n", NIL);
 
     // Emit all of the local variables for holding arguments.
     emit_parameter_variables(l, f);
@@ -946,6 +1517,8 @@ public:
       }
     }
 
+    int guest_imdecl_start = Len(imclass_class_code);
+    String *guest_cargs = NewString("jenv, jcls");
     Printf(imclass_class_code, "  public final static native %s %s(", im_return_type, overloaded_name);
 
     num_arguments = emit_num_arguments(l);
@@ -986,6 +1559,7 @@ public:
 
       // Add parameter to C function
       Printv(f->def, ", ", c_param_type, " ", arg, NIL);
+      Printv(guest_cargs, ", ", arg, NIL);
 
       ++gencomma;
 
@@ -996,6 +1570,7 @@ public:
 	  Printf(imclass_class_code, ", %s %s_", pgc_parameter, arg);
 	  Printf(f->def, ", jobject %s_", arg);
 	  Printf(f->code, "    (void)%s_;\n", arg);
+	  Printf(guest_cargs, ", %s_", arg);
 	}
       }
       // Get typemap for this argument
@@ -1129,8 +1704,23 @@ public:
 
     Printf(f->def, ") {");
 
+    if (guest_flag) {
+      // Kept for merging overloads that collide in Java (guestFlush)
+      Setattr(n, "java:guest:imdecl", NewStringWithSize(Char(imclass_class_code) + guest_imdecl_start, Len(imclass_class_code) - guest_imdecl_start));
+      Setattr(n, "java:guest:imname", overloaded_name);
+      Setattr(n, "java:guest:cdef", Copy(f->def));
+      Setattr(n, "java:guest:cargs", guest_cargs);
+      Setattr(n, "java:guest:void", is_void_return ? "1" : "0");
+    }
+    Delete(guest_cargs);
+
     if (!is_void_return)
       Printv(f->code, "    return jresult;\n", NIL);
+    if (guest_flag) {
+      Printv(f->code, "  } SWIG_JAVA_GUEST_CATCH($null)\n", NIL);
+      if (!is_void_return)
+	Printv(f->code, "  return $null;\n", NIL);
+    }
     Printf(f->code, "}\n");
 
     /* Substitute the cleanup code */
@@ -1773,6 +2363,8 @@ public:
 	} else if (Strcmp(code, "constantsmodifiers") == 0) {
 	  Delete(constants_modifiers);
 	  constants_modifiers = Copy(strvalue);
+	} else if (Strcmp(code, "guestobjects") == 0) {
+	  guest_flag = Cmp(strvalue, "0") != 0;
 	} else {
 	  Swig_error(input_file, line_number, "Unrecognized pragma.\n");
 	}
@@ -2005,6 +2597,25 @@ public:
 	   typemapLookup(n, "javabody", typemap_lookup_type, WARN_JAVA_TYPEMAP_JAVABODY_UNDEF),	// main body of class
 	   NIL);
 
+    // $jnidestructor: method reference to the intermediary class destructor, null if not wrapped
+    if (Strstr(proxy_class_def, "$jnidestructor")) {
+      String *jnidestructor = NewString("null");
+      if (*Char(destructor_call)) {
+	Delete(jnidestructor);
+	jnidestructor = Copy(destructor_call);
+	Replaceall(jnidestructor, "(swigCPtr)", "");
+	char *c = Char(jnidestructor);
+	char *dot = strrchr(c, '.');
+	if (dot) {
+	  String *ref = NewStringf("%s::%s", NewStringWithSize(c, (int)(dot - c)), dot + 1);
+	  Delete(jnidestructor);
+	  jnidestructor = ref;
+	}
+      }
+      Replaceall(proxy_class_def, "$jnidestructor", jnidestructor);
+      Delete(jnidestructor);
+    }
+
     // C++ destructor is wrapped by the delete method
     // Note that the method name is specified in a typemap attribute called methodname
     String *destruct = NewString("");
@@ -2173,6 +2784,10 @@ public:
     bool has_outerclass = Getattr(n, "nested:outer") && !GetFlag(n, "feature:flatnested");
     String *old_interface_class_code = interface_class_code;
     interface_class_code = 0;
+    Hash *old_guest_pending = guest_pending;
+    List *old_guest_pending_keys = guest_pending_keys;
+    guest_pending = NewHash();
+    guest_pending_keys = NewList();
 
     if (proxy_flag) {
       proxy_class_name = NewString(Getattr(n, "sym:name"));
@@ -2211,6 +2826,31 @@ public:
 	  else
 	    full_proxy_class_name = NewStringf("%s.%s", nspace, proxy_class_name);
 	}
+      }
+
+      if (guest_flag) {
+	// Register the proxy class as clientdata of the class pointer type (JNI binary name)
+	String *binary_name = NewString("");
+	if (package)
+	  Printv(binary_name, package, ".", NIL);
+	if (nspace)
+	  Printv(binary_name, nspace, ".", NIL);
+	Replaceall(binary_name, ".", "/");
+	if (outerClassesPrefix) {
+	  String *outer = Copy(outerClassesPrefix);
+	  Replaceall(outer, ".", "$");
+	  Printv(binary_name, outer, "$", NIL);
+	  Delete(outer);
+	}
+	Append(binary_name, proxy_class_name);
+	SwigType *ct = Copy(Getattr(n, "name"));
+	SwigType_add_pointer(ct);
+	SwigType_remember(ct);
+	String *mangled = SwigType_manglestr(ct);
+	Printf(guest_register, "{\n  static swig_java_guest_class c = { \"%s\", 0, 0, 0 };\n  SWIG_JavaGuestRegister(jenv, SWIGTYPE%s, &c);\n}\n", binary_name, mangled);
+	Delete(mangled);
+	Delete(ct);
+	Delete(binary_name);
       }
 
       String *interface_name = GetFlag(n, "feature:interface") ? Getattr(n, "interface:name") : 0;
@@ -2282,6 +2922,9 @@ public:
     }
 
     Language::classHandler(n);
+
+    if (proxy_flag && guest_flag)
+      guestFlush(proxy_class_code, guest_pending, guest_pending_keys);
 
     if (proxy_flag) {
       emitProxyClassDefAndCPPCasts(n);
@@ -2366,6 +3009,10 @@ public:
       Delete(proxy_class_code);
       proxy_class_code = old_proxy_class_code;
     }
+    Delete(guest_pending);
+    Delete(guest_pending_keys);
+    guest_pending = old_guest_pending;
+    guest_pending_keys = old_guest_pending_keys;
 
     return SWIG_OK;
   }
@@ -2499,6 +3146,8 @@ public:
     if (static_flag)
       Printf(function_code, "static ");
     Printf(function_code, "%s %s(", return_type, proxy_function_name);
+    int guest_pre = Len(function_code);
+    List *guest_params = guest_flag ? NewList() : 0;
 
     if (is_interface)
       Printf(interface_class_code, "  %s %s(", return_type, proxy_function_name);
@@ -2596,6 +3245,8 @@ public:
 	}
 	gencomma = 2;
 	Printf(function_code, "%s %s", param_type, arg);
+	if (guest_params)
+	  guestRecordParam(guest_params, p, param_type, arg);
 	if (is_interface)
 	  Printf(interface_class_code, "%s %s", param_type, arg);
 
@@ -2619,6 +3270,7 @@ public:
 
     Printf(imcall, ")");
     Printf(function_code, ")");
+    int guest_post = Len(function_code) - 1;
 
     // Transform return type used in JNI function (in intermediary class) to type used in Java wrapper function (in proxy class)
     if ((tm = Swig_typemap_lookup("javaout", n, "", 0))) {
@@ -2645,6 +3297,8 @@ public:
       else
 	Replaceall(tm, "$owner", "false");
       substituteClassname(t, tm);
+      if (guest_params && (is_pre_code || is_post_code))
+	SetFlag(n, "java:guest:nomerge");
 
       // For director methods: generate code to selectively make a normal polymorphic call or 
       // an explicit method call - needed to prevent infinite recursion calls in director methods.
@@ -2684,13 +3338,29 @@ public:
     }
     generateThrowsClause(n, function_code);
     Printf(function_code, " %s\n\n", tm ? tm : empty_string);
-    Printv(proxy_class_code, function_code, NIL);
+    if (guest_params) {
+      if (explicit_call_node(n))
+	SetFlag(n, "java:guest:nomerge");
+      guestDefer(guest_pending, guest_pending_keys, n, "m", proxy_function_name, static_flag, function_code, guest_pre, guest_post, guest_params, imcall, return_type);
+      Delete(guest_params);
+    } else {
+      Printv(proxy_class_code, function_code, NIL);
+    }
 
     Delete(pre_code);
     Delete(post_code);
     Delete(function_code);
     Delete(return_type);
     Delete(imcall);
+  }
+
+  // Guest mode: a guest value crosses the intermediary class as Object
+  bool guestObjectJtype(const String *jtype) {
+    return guest_flag && jtype && (Cmp(jtype, "Object") == 0 || Cmp(jtype, "java.lang.Object") == 0);
+  }
+
+  static bool explicit_call_node(Node *n) {
+    return Getattr(n, "explicitcallnode") != 0;
   }
 
   /* ----------------------------------------------------------------------
@@ -2753,6 +3423,8 @@ public:
       }
 
       Printf(function_code, "  %s %s(", methodmods, proxy_class_name);
+      int guest_pre = Len(function_code);
+      List *guest_params = guest_flag ? NewList() : 0;
       Printf(helper_code, "  static private %s SwigConstruct%s(", im_return_type, proxy_class_name);
 
       Printv(imcall, full_imclass_name, ".", mangled_overname, "(", NIL);
@@ -2831,6 +3503,8 @@ public:
 	  Printf(helper_args, ", ");
         }
 	Printf(function_code, "%s %s", param_type, arg);
+	if (guest_params)
+	  guestRecordParam(guest_params, p, param_type, arg);
 	Printf(helper_code, "%s %s", param_type, arg);
 	Printf(helper_args, "%s", arg);
 	++gencomma;
@@ -2855,6 +3529,7 @@ public:
       Printf(imcall, ")");
 
       Printf(function_code, ")");
+      int guest_post = Len(function_code) - 1;
       Printf(helper_code, ")");
       generateThrowsClause(n, function_code);
 
@@ -2901,11 +3576,19 @@ public:
         Printv(proxy_class_code, helper_code, "\n", NIL);
         Replaceall(function_code, "$imcall", helper_name);
         Delete(helper_name);
+        if (guest_params)
+          SetFlag(n, "java:guest:nomerge");
       } else {
         Replaceall(function_code, "$imcall", imcall);
       }
 
-      Printv(proxy_class_code, function_code, "\n", NIL);
+      if (guest_params) {
+        Printv(function_code, "\n", NIL);
+        guestDefer(guest_pending, guest_pending_keys, n, "c", proxy_class_name, false, function_code, guest_pre, guest_post, guest_params, imcall, 0);
+        Delete(guest_params);
+      } else {
+        Printv(proxy_class_code, function_code, "\n", NIL);
+      }
 
       Delete(helper_args);
       Delete(im_return_type);
@@ -3063,6 +3746,8 @@ public:
     const String *methodmods = Getattr(n, "feature:java:methodmodifiers");
     methodmods = methodmods ? methodmods : (is_public(n) ? public_string : protected_string);
     Printf(function_code, "  %s static %s %s(", methodmods, return_type, func_name);
+    int guest_pre = Len(function_code);
+    List *guest_params = guest_flag ? NewList() : 0;
     Printv(imcall, imclass_name, ".", overloaded_name, "(", NIL);
 
     /* Get number of required and total arguments */
@@ -3126,6 +3811,8 @@ public:
 	Printf(function_code, ", ");
       gencomma = 2;
       Printf(function_code, "%s %s", param_type, arg);
+      if (guest_params)
+	guestRecordParam(guest_params, p, param_type, arg);
 
       if (prematureGarbageCollectionPreventionParameter(pt, p)) {
         String *pgcppname = Getattr(p, "tmap:javain:pgcppname");
@@ -3146,12 +3833,15 @@ public:
 
     Printf(imcall, ")");
     Printf(function_code, ")");
+    int guest_post = Len(function_code) - 1;
 
     // Transform return type used in JNI function (in intermediary class) to type used in Java wrapper function (in module class)
     if ((tm = Swig_typemap_lookup("javaout", n, "", 0))) {
       addThrows(n, "tmap:javaout", n);
       bool is_pre_code = Len(pre_code) > 0;
       bool is_post_code = Len(post_code) > 0;
+      if (guest_params && (is_pre_code || is_post_code))
+	SetFlag(n, "java:guest:nomerge");
       if (is_pre_code || is_post_code) {
         Replaceall(tm, "\n ", "\n   "); // add extra indentation to code in typemap
         if (is_post_code) {
@@ -3180,7 +3870,12 @@ public:
 
     generateThrowsClause(n, function_code);
     Printf(function_code, " %s\n\n", tm ? tm : empty_string);
-    Printv(module_class_code, function_code, NIL);
+    if (guest_params) {
+      guestDefer(guest_module_pending, guest_module_pending_keys, n, "f", func_name, true, function_code, guest_pre, guest_post, guest_params, imcall, return_type);
+      Delete(guest_params);
+    } else {
+      Printv(module_class_code, function_code, NIL);
+    }
 
     Delete(pre_code);
     Delete(post_code);
@@ -3755,8 +4450,8 @@ public:
    * emitDirectorUpcalls()
    *--------------------------------------------------------------------*/
 
-  void emitDirectorUpcalls() {
-    if (n_dmethods) {
+  void emitDirectorUpcalls(String *f_target) {
+    if (n_dmethods || guest_flag) {
       Wrapper *w = NewWrapper();
       String *jni_imclass_name = makeValidJniName(imclass_name);
       String *swig_module_init = NewString("swig_module_init");
@@ -3778,33 +4473,37 @@ public:
 	Putc('\n', dmethod_data);
       }
 
-      Printf(f_runtime, "namespace Swig {\n");
-      Printf(f_runtime, "  namespace {\n");
-      Printf(f_runtime, "    jclass jclass_%s = NULL;\n", imclass_name);
-      Printf(f_runtime, "    jmethodID director_method_ids[%d];\n", n_methods);
-      Printf(f_runtime, "  }\n");
-      Printf(f_runtime, "}\n");
-
       Printf(w->def, "SWIGEXPORT void JNICALL Java_%s%s_%s(JNIEnv *jenv, jclass jcls) {", jnipackage, jni_imclass_name, swig_module_init_jni);
-      Printf(w->code, "static struct {\n");
-      Printf(w->code, "  const char *method;\n");
-      Printf(w->code, "  const char *signature;\n");
-      Printf(w->code, "} methods[%d] = {\n", n_methods);
-      Printv(w->code, dmethod_data, NIL);
-      Printf(w->code, "};\n");
+      if (guest_flag)
+	Printf(w->code, "SWIG_JavaGuestInit(jenv);\n");
+      if (n_methods) {
+	Printf(f_runtime, "namespace Swig {\n");
+	Printf(f_runtime, "  namespace {\n");
+	Printf(f_runtime, "    jclass jclass_%s = NULL;\n", imclass_name);
+	Printf(f_runtime, "    jmethodID director_method_ids[%d];\n", n_methods);
+	Printf(f_runtime, "  }\n");
+	Printf(f_runtime, "}\n");
 
-      Wrapper_add_local(w, "i", "int i");
+	Printf(w->code, "static struct {\n");
+	Printf(w->code, "  const char *method;\n");
+	Printf(w->code, "  const char *signature;\n");
+	Printf(w->code, "} methods[%d] = {\n", n_methods);
+	Printv(w->code, dmethod_data, NIL);
+	Printf(w->code, "};\n");
 
-      Printf(w->code, "Swig::jclass_%s = (jclass) jenv->NewGlobalRef(jcls);\n", imclass_name);
-      Printf(w->code, "if (!Swig::jclass_%s) return;\n", imclass_name);
-      Printf(w->code, "for (i = 0; i < (int) (sizeof(methods)/sizeof(methods[0])); ++i) {\n");
-      Printf(w->code, "  Swig::director_method_ids[i] = jenv->GetStaticMethodID(jcls, methods[i].method, methods[i].signature);\n");
-      Printf(w->code, "  if (!Swig::director_method_ids[i]) return;\n");
+	Wrapper_add_local(w, "i", "int i");
+
+	Printf(w->code, "Swig::jclass_%s = (jclass) jenv->NewGlobalRef(jcls);\n", imclass_name);
+	Printf(w->code, "if (!Swig::jclass_%s) return;\n", imclass_name);
+	Printf(w->code, "for (i = 0; i < (int) (sizeof(methods)/sizeof(methods[0])); ++i) {\n");
+	Printf(w->code, "  Swig::director_method_ids[i] = jenv->GetStaticMethodID(jcls, methods[i].method, methods[i].signature);\n");
+	Printf(w->code, "  if (!Swig::director_method_ids[i]) return;\n");
+	Printf(w->code, "}\n");
+      }
+
       Printf(w->code, "}\n");
 
-      Printf(w->code, "}\n");
-
-      Wrapper_print(w, f_wrappers);
+      Wrapper_print(w, f_target);
       Delete(dmethod_data);
       Delete(swig_module_init_jni);
       Delete(swig_module_init);
@@ -4144,7 +4843,7 @@ public:
 
 	// Objects marshalled passing a Java class across JNI boundary use jobject - the nouse flag indicates this
 	// We need the specific Java class name instead of the generic 'Ljava/lang/Object;'
-	if (GetFlag(tp, "tmap:directorin:nouse"))
+	if (GetFlag(tp, "tmap:directorin:nouse") && !guestObjectJtype(Swig_typemap_lookup("jtype", n, "", 0)))
 	  jdesc = cdesc;
 	String *jnidesc_canon = canonicalizeJNIDescriptor(jdesc, tp);
 	Append(jniret_desc, jnidesc_canon);
@@ -4277,7 +4976,7 @@ public:
 
 	  // Objects marshalled by passing a Java class across the JNI boundary use jobject as the JNI type - 
 	  // the nouse flag indicates this. We need the specific Java class name instead of the generic 'Ljava/lang/Object;'
-	  if (GetFlag(tp, "tmap:directorin:nouse"))
+	  if (GetFlag(tp, "tmap:directorin:nouse") && !guestObjectJtype(Getattr(p, "tmap:jtype")))
 	    jdesc = cdesc;
 	  String *jni_canon = canonicalizeJNIDescriptor(jdesc, tp);
 	  Append(jnidesc, jni_canon);

@@ -55,6 +55,7 @@ CPP_TEST_CASES = \
 #	li_boost_intrusive_ptr
 
 CPP11_TEST_CASES = \
+	java_guest_object \
 	cpp11_shared_ptr_const \
 	cpp11_shared_ptr_crtp_upcast \
 	cpp11_shared_ptr_nullptr_in_containers \
