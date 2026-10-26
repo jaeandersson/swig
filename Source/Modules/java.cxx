@@ -817,10 +817,10 @@ public:
    *
    * Proxy methods, constructors and module functions are recorded as header,
    * parameters and body, and emitted when their class (or the module) ends.
-   * Overloads whose Java signatures are equal after erasure are merged into one
-   * method that is dispatched in C++ on the typecheck typemaps.  Methods with a
-   * parameter whose jstype typemap has a widen attribute get variants taking
-   * the alternatives; of equal signatures the lowest typecheck precedence wins.
+   * Methods with a parameter whose jstype typemap has a widen attribute get
+   * variants taking the alternatives; of equal signatures the lowest typecheck
+   * precedence wins.  Then methods whose Java signatures are equal after erasure
+   * are merged into one method that is dispatched in C++ on the typecheck typemaps.
    * ----------------------------------------------------------------------------- */
 
   void guestRecordParam(List *params, Parm *p, String *type, String *name) {
@@ -1000,8 +1000,9 @@ public:
 
   void guestFlush(String *target, Hash *pending, List *keys) {
     for (Iterator k = First(keys); k.item; k = Next(k)) {
-      List *merged = guestMerge(Getattr(pending, k.item));
-      List *all = guestWiden(merged);
+      // Widened variants take part in merging: they may collide with other overloads after erasure
+      List *widened = guestWiden(Getattr(pending, k.item));
+      List *all = guestMerge(widened);
       if (Len(all) > 0)
 	guestJavadoc(Getitem(all, 0));
       for (Iterator e = First(all); e.item; e = Next(e)) {
@@ -1010,7 +1011,7 @@ public:
 	Delete(code);
       }
       Delete(all);
-      Delete(merged);
+      Delete(widened);
     }
     Clear(pending);
     Clear(keys);
@@ -1181,7 +1182,10 @@ public:
 
     // C++ dispatcher with the members' JNI signature
     String *imname0 = Getattr(n0, "java:guest:imname");
-    String *disp = NewStringf("%sSWIGMerged", imname0);
+    // Several merged groups may start with the same overload (widened variants)
+    int nmerged = Getattr(n0, "java:guest:nmerged") ? atoi(Char(Getattr(n0, "java:guest:nmerged"))) : 0;
+    Setattr(n0, "java:guest:nmerged", NewStringf("%d", nmerged + 1));
+    String *disp = nmerged ? NewStringf("%sSWIGMerged%d", imname0, nmerged) : NewStringf("%sSWIGMerged", imname0);
     String *jdisp = makeValidJniName(disp);
     String *wdisp = Swig_name_wrapper(jdisp);
     String *wname0 = Getattr(n0, "wrap:name");
@@ -1555,7 +1559,8 @@ public:
     Setattr(n, "wrap:name", wname);
 
     // Wrappers not wanted for some methods where the parameters cannot be overloaded in Java
-    if (Getattr(n, "sym:overloaded")) {
+    // (guest mode: overloads equal in Java are merged instead, see guestMerge)
+    if (Getattr(n, "sym:overloaded") && !guest_flag) {
       // Emit warnings for the few cases that can't be overloaded in Java and give up on generating wrapper
       Swig_overload_check(n);
       if (Getattr(n, "overload:ignore")) {

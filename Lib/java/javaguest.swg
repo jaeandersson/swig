@@ -145,12 +145,12 @@ SWIGRUNTIME int SWIG_JavaGuestConvertPtr(jobject obj, void **ptr, swig_type_info
 }
 #define SWIG_ConvertPtr(obj, pptr, type, flags) SWIG_JavaGuestConvertPtr(obj, pptr, type, flags)
 
-/* C++ pointer -> new proxy (owning with SWIG_POINTER_OWN), 0 if the type has no proxy */
+/* C++ pointer -> new proxy (owning with SWIG_POINTER_OWN); null is a Java value, so failures throw */
 SWIGRUNTIME jobject SWIG_JavaGuestNewPointerObj(void *ptr, swig_type_info *ty, int flags) {
-  JNIEnv *jenv = SWIG_JavaGuestEnv();
-  if (!jenv || !ty) return 0;
-  swig_java_guest_class *c = static_cast<swig_java_guest_class *>(ty->clientdata);
-  if (!c || !c->cls || !c->ctor) return 0;
+  JNIEnv *jenv = SWIG_JavaGuestEnvChecked();
+  swig_java_guest_class *c = ty ? static_cast<swig_java_guest_class *>(ty->clientdata) : 0;
+  if (!c || !c->cls || !c->ctor)
+    throw Swig::JavaGuestError(SWIG_TypeError, std::string("no Java proxy class for ") + (ty ? SWIG_TypePrettyName(ty) : "unknown type"));
   jobject r = jenv->NewObject(c->cls, c->ctor, reinterpret_cast<jlong>(ptr), (jboolean)((flags & SWIG_POINTER_OWN) != 0));
   SWIG_JavaGuestCheck(jenv);
   return r;
