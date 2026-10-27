@@ -167,6 +167,9 @@ struct Bag {
   Bag(const std::vector<Pt>&) : what("pt") {}
   std::string count(const std::vector<Vec>& v) const { return "vec" + std::to_string(v.size()); }
   std::string count(const std::vector<Pt>& v) const { return "pt" + std::to_string(v.size()); }
+  // const twin of a non-const overload: the non-const one is wrapped
+  std::string which(const Vec&) const { return "const"; }
+  std::string which(const Vec&) { return "nonconst"; }
 };
 %}
 

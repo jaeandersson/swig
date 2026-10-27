@@ -1191,6 +1191,15 @@ public:
     if (x0.empty())
       typevar = false;
 
+    // A type variable only inside parameter containers is a wildcard: elements are checked in C++
+    bool wildcard = typevar;
+    for (size_t k = 0; k <= np && wildcard; ++k) {
+      std::vector<std::string> a = guestTokens(types[0][k]);
+      for (size_t j = 0; j < a.size() && wildcard; ++j)
+	if (var[k][j] && (k == np || j == 0 || (a[j - 1] != "<" && a[j - 1] != ",")))
+	  wildcard = false;
+    }
+
     // Merged Java types
     std::vector<std::string> mtypes(np + 1);
     bool changed_ret = false;
@@ -1203,7 +1212,7 @@ public:
       } else if (typevar) {
 	std::vector<std::string> a = guestTokens(types[0][k]);
 	for (size_t j = 0; j < a.size(); ++j)
-	  mtypes[k] += var[k][j] ? std::string("T") : a[j];
+	  mtypes[k] += var[k][j] ? std::string(wildcard ? "?" : "T") : a[j];
       } else {
 	bool same_raw = true;
 	for (size_t i = 1; i < group.size(); ++i)
@@ -1286,7 +1295,7 @@ public:
       if (!ifs || !guestHasToken(ifs, Char(bound)))
 	bound = 0;
     }
-    String *tparams = typevar ? (bound ? NewStringf("<T extends %s> ", bound) : NewString("<T> ")) : NewString("");
+    String *tparams = typevar && !wildcard ? (bound ? NewStringf("<T extends %s> ", bound) : NewString("<T> ")) : NewString("");
     const String *methodmods = Getattr(n0, "feature:java:methodmodifiers");
     methodmods = methodmods ? methodmods : (is_public(n0) ? public_string : protected_string);
     String *pre = NewString("");

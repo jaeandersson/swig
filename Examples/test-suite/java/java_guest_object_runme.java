@@ -40,6 +40,9 @@ public class java_guest_object_runme {
     check(f.get(0) == 5 && g.getX() == 6, "<T extends Shape> T first(List<T>) typed returns");
     check(new Bag(List.of(new Pt(1, 2))).getWhat().equals("pt") && new Bag(List.of(new Vec(1))).getWhat().equals("vec"), "merged constructor");
     check(new Bag(List.of(new Vec(1))).count(List.of(new Pt(1, 2), new Pt(3, 4))).equals("pt2"), "merged member method");
+    java.util.List<Object> mixed = new java.util.ArrayList<>(List.of(new Pt(1, 2)));
+    check(java_guest_object.kind(mixed).equals("pt"), "parameter-only type variable is a wildcard");
+    check(new Bag(List.of(new Vec(1))).which(new Vec(1)).equals("nonconst"), "non-const twin wins");
     try { noMatch(); check(false, "no match"); }
     catch (IllegalArgumentException e) { check(e.getMessage().startsWith("No matching overload of 'kind'"), "no match -> IllegalArgumentException: " + e.getMessage().replace('\n', '|')); }
     // output arguments
