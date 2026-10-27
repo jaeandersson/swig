@@ -424,6 +424,88 @@ pub mod rt {
         }
     }
 
+    /// Dynamically typed value, e.g. a GenericType
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum Value {
+        None,
+        Bool(bool),
+        Int(i64),
+        Float(f64),
+        /// Numeric matrix, column-major (rows, cols, data)
+        Matrix(usize, usize, Vec<f64>),
+        Str(String),
+        List(Vec<Value>),
+        Dict(BTreeMap<String, Value>),
+        /// Wrapped object, by type name
+        Object(String),
+    }
+
+    impl FromRV for Value {
+        fn from_rv(v: RVRef) -> Option<Self> {
+            unsafe {
+                Some(match v.kind() {
+                    NIL => Value::None,
+                    NUM => {
+                        let (r, c) = (swig_rv_rows(v.0) as usize, swig_rv_cols(v.0) as usize);
+                        let e = swig_rv_elem(v.0);
+                        if r == 1 && c == 1 && swig_rv_is_sparse(v.0) == 0 {
+                            match e {
+                                F64 => Value::Float(*swig_rv_f64_data(v.0)),
+                                I64 => Value::Int(*swig_rv_i64_data(v.0)),
+                                _ => Value::Bool(*swig_rv_i64_data(v.0) != 0),
+                            }
+                        } else if swig_rv_is_sparse(v.0) == 0 && (r <= 1 || c <= 1) && e != F64 {
+                            let d = std::slice::from_raw_parts(swig_rv_i64_data(v.0), r * c);
+                            Value::List(d.iter().map(|&x| if e == I64 { Value::Int(x) } else { Value::Bool(x != 0) }).collect())
+                        } else {
+                            let nnz = swig_rv_nnz(v.0);
+                            let mut d = vec![0.0; r * c];
+                            if swig_rv_is_sparse(v.0) != 0 {
+                                let ci = std::slice::from_raw_parts(swig_rv_colind(v.0), c + 1);
+                                let ri = std::slice::from_raw_parts(swig_rv_row(v.0), nnz);
+                                let nz = std::slice::from_raw_parts(swig_rv_f64_data(v.0), nnz);
+                                for j in 0..c {
+                                    for k in ci[j] as usize..ci[j + 1] as usize {
+                                        d[ri[k] as usize + j * r] = nz[k];
+                                    }
+                                }
+                            } else if e == F64 {
+                                d.copy_from_slice(std::slice::from_raw_parts(swig_rv_f64_data(v.0), r * c));
+                            } else {
+                                let s = std::slice::from_raw_parts(swig_rv_i64_data(v.0), r * c);
+                                for k in 0..r * c {
+                                    d[k] = s[k] as f64;
+                                }
+                            }
+                            Value::Matrix(r, c, d)
+                        }
+                    }
+                    STR => Value::Str(String::from_rv(v)?),
+                    LIST => Value::List((0..v.len()).map(|i| Value::from_rv(v.item(i))).collect::<Option<_>>()?),
+                    DICT => Value::Dict((0..v.len()).map(|i| Some((v.key(i), Value::from_rv(v.item(i))?))).collect::<Option<_>>()?),
+                    PTR => Value::Object(std::ffi::CStr::from_ptr(swig_rv_type_name(v.0)).to_string_lossy().into_owned()),
+                    _ => return None,
+                })
+            }
+        }
+    }
+
+    impl ToRV for Value {
+        fn to_rv(&self) -> RV {
+            match self {
+                Value::None => RV::nil(),
+                Value::Bool(b) => b.to_rv(),
+                Value::Int(i) => i.to_rv(),
+                Value::Float(x) => x.to_rv(),
+                Value::Matrix(r, c, d) => RV::f64_matrix(*r, *c, d),
+                Value::Str(s) => s.to_rv(),
+                Value::List(l) => RV::list(l.iter().map(|e| e.to_rv()).collect()),
+                Value::Dict(d) => RV::dict(d.iter().map(|(k, v)| (k.as_str(), v.to_rv()))),
+                Value::Object(n) => panic!("cannot pass a {} back by type name", n),
+            }
+        }
+    }
+
     /// Wrapped C++ object; deletes it on drop when owned
     pub struct Handle {
         pub ptr: *mut c_void,

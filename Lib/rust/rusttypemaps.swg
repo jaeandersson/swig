@@ -5,7 +5,7 @@
 %include <rustprimtypes.swg>
 
 #define SWIG_Object SwigRV*
-#define VOID_Object SWIG_Rust_NewPointerObj(0, 0, 0)
+#define VOID_Object (SwigRV*)0
 
 // append output: results go to resv, see the wrapper
 #define SWIG_AppendOutput(result, obj)  obj

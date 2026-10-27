@@ -116,6 +116,29 @@ SWIGRUNTIME SwigRV* SWIG_Rust_NewNum(int elem, long long rows, long long cols) {
   return v;
 }
 
+SWIGRUNTIME SwigRV* SWIG_Rust_NewF64(double x) {
+  SwigRV *v = SWIG_Rust_NewNum(SWIG_RV_F64, 1, 1);
+  v->f64[0] = x;
+  return v;
+}
+
+SWIGRUNTIME SwigRV* SWIG_Rust_NewI64(long long x) {
+  SwigRV *v = SWIG_Rust_NewNum(SWIG_RV_I64, 1, 1);
+  v->i64[0] = x;
+  return v;
+}
+
+SWIGRUNTIME SwigRV* SWIG_Rust_NewBool(bool x) {
+  SwigRV *v = SWIG_Rust_NewNum(SWIG_RV_BOOL, 1, 1);
+  v->i64[0] = x ? 1 : 0;
+  return v;
+}
+
+/* Dense numeric vector (one of the dimensions at most 1) */
+SWIGRUNTIME int SWIG_Rust_IsVector(const SwigRV *v) {
+  return SWIG_Rust_IsNum(v) && !v->sparse && (v->rows <= 1 || v->cols <= 1);
+}
+
 SWIGRUNTIME SwigRV* SWIG_Rust_NewStr(const char *s, size_t n) {
   SwigRV *v = new SwigRV();
   v->kind = SWIG_RV_STR;
