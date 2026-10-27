@@ -76,5 +76,7 @@ public class java_guest_object_runme {
     try (Vec c = new Vec(3)) { check(c.get(0) == 3, "try-with-resources"); }
     Vec c2 = new Vec(4); c2.close(); c2.close();
     check(true, "double close is a no-op");
+    try { c2.size(); check(false, "call on a closed proxy throws"); }
+    catch (IllegalStateException e) { check(e.getMessage().contains("closed"), "call on a closed proxy throws: " + e); }
   }
 }

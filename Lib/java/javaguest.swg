@@ -79,11 +79,18 @@ SWIGRUNTIME void SWIG_JavaGuestCheck(JNIEnv *jenv) {
   if (jenv->ExceptionCheck()) throw Swig::JavaGuestPending();
 }
 
+/* Error code of a call on a closed proxy */
+#define SWIG_JAVA_GUEST_CLOSED -100
+
 SWIGRUNTIME void SWIG_JavaGuestThrow(JNIEnv *jenv, int code, const char *msg) {
   if (jenv->ExceptionCheck()) return;
   const char *name = SWIG_JAVA_GUEST_EXCEPTION;
-  if (code == SWIG_TypeError || code == SWIG_ValueError || code == SWIG_NullReferenceError)
+  if (code == SWIG_TypeError || code == SWIG_ValueError)
     name = "java/lang/IllegalArgumentException";
+  else if (code == SWIG_NullReferenceError)
+    name = "java/lang/NullPointerException";
+  else if (code == SWIG_JAVA_GUEST_CLOSED)
+    name = "java/lang/IllegalStateException";
   else if (code == SWIG_IndexError)
     name = "java/lang/IndexOutOfBoundsException";
   else if (code == SWIG_MemoryError)
@@ -547,6 +554,12 @@ SWIGINTERNINLINE jobject SWIG_From_dec(T)(T value) {
 %java_guest_from(unsigned long long, jenv->CallStaticObjectMethod(j.Long, j.Long_valueOf, (jlong)value))
 %java_guest_from(double, jenv->CallStaticObjectMethod(j.Double, j.Double_valueOf, (jdouble)value))
 %java_guest_from(float, jenv->CallStaticObjectMethod(j.Double, j.Double_valueOf, (jdouble)value))
+
+/* A closed proxy passes a null this pointer */
+%typemap(in) SWIGTYPE *self %{
+  $1 = *($&1_ltype)&$input;
+  if (!$1) SWIG_exception_fail(SWIG_JAVA_GUEST_CLOSED, "the object has been closed");
+%}
 
 #define %dirout_fail(code, msg) SWIG_exception_fail(code, msg)
 #define %append_output(obj) $result = SWIG_JavaGuestAppendOutput($result, obj)
