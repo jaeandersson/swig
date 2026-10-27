@@ -82,6 +82,8 @@ SWIGRUNTIME void SWIG_JavaGuestCheck(JNIEnv *jenv) {
 /* Error code of a call on a closed proxy */
 #define SWIG_JAVA_GUEST_CLOSED -100
 
+SWIGRUNTIME jobject SWIG_JavaGuestNewString(const std::string &s);
+
 SWIGRUNTIME void SWIG_JavaGuestThrow(JNIEnv *jenv, int code, const char *msg) {
   if (jenv->ExceptionCheck()) return;
   const char *name = SWIG_JAVA_GUEST_EXCEPTION;
@@ -96,7 +98,24 @@ SWIGRUNTIME void SWIG_JavaGuestThrow(JNIEnv *jenv, int code, const char *msg) {
   else if (code == SWIG_MemoryError)
     name = "java/lang/OutOfMemoryError";
   jclass cls = jenv->FindClass(name);
-  if (cls) jenv->ThrowNew(cls, msg);
+  if (!cls) return;
+  // The message as UTF-8 (ThrowNew takes modified UTF-8)
+  jmethodID ctor = jenv->GetMethodID(cls, "<init>", "(Ljava/lang/String;)V");
+  if (ctor) {
+    try {
+      jobject s = SWIG_JavaGuestNewString(msg);
+      jobject t = jenv->NewObject(cls, ctor, s);
+      jenv->DeleteLocalRef(s);
+      if (t && !jenv->ExceptionCheck()) {
+        jenv->Throw(static_cast<jthrowable>(t));
+        jenv->DeleteLocalRef(t);
+        return;
+      }
+    } catch (...) {
+    }
+  }
+  jenv->ExceptionClear();
+  jenv->ThrowNew(cls, msg);
 }
 
 #define SWIG_JAVA_GUEST_CATCH(nullreturn) \
