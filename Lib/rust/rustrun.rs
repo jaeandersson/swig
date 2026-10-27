@@ -2,6 +2,17 @@
 // rustrun.rs: Rust side of the -rust runtime (guest values, errors, calls)
 // -----------------------------------------------------------------------------
 
+/// Dictionary of values of any type: dict!{"a" => 1.0, "b" => &x}
+#[macro_export]
+macro_rules! dict {
+    () => { $crate::rt::Dict::new() };
+    ($($k:expr => $v:expr),+ $(,)?) => {{
+        let mut d = $crate::rt::Dict::new();
+        $(d.insert($k, $v);)+
+        d
+    }};
+}
+
 #[allow(dead_code)]
 pub mod rt {
     use std::collections::{BTreeMap, HashMap};
@@ -504,6 +515,130 @@ pub mod rt {
                 Value::Object(n) => panic!("cannot pass a {} back by type name", n),
             }
         }
+    }
+
+    /// Kinds of argument values: overloads are resolved on these at compile time
+    pub mod kind {
+        use std::marker::PhantomData;
+        pub struct F64;
+        pub struct I64;
+        pub struct Bool;
+        pub struct Str;
+        pub struct Dict;
+        pub struct Vec<K>(PhantomData<K>);
+        pub struct Map<K>(PhantomData<K>);
+        pub struct Pair<A, B>(PhantomData<(A, B)>);
+    }
+
+    /// Value with a kind
+    pub trait HasKind {
+        type K;
+    }
+
+    impl<T: HasKind + ?Sized> HasKind for &T {
+        type K = T::K;
+    }
+
+    impl<T: HasKind + ?Sized> HasKind for &mut T {
+        type K = T::K;
+    }
+
+    macro_rules! has_kind {
+        ($k:ident: $($t:ty),*) => {$(
+            impl HasKind for $t {
+                type K = kind::$k;
+            }
+        )*};
+    }
+    has_kind!(F64: f64, f32);
+    has_kind!(I64: i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
+    has_kind!(Bool: bool);
+    has_kind!(Str: str, String);
+
+    impl<X: HasKind> HasKind for Vec<X> {
+        type K = kind::Vec<X::K>;
+    }
+
+    impl<X: HasKind> HasKind for [X] {
+        type K = kind::Vec<X::K>;
+    }
+
+    impl<X: HasKind, const N: usize> HasKind for [X; N] {
+        type K = kind::Vec<X::K>;
+    }
+
+    impl<S: AsRef<str>, X: HasKind> HasKind for HashMap<S, X> {
+        type K = kind::Map<X::K>;
+    }
+
+    impl<S: AsRef<str>, X: HasKind> HasKind for BTreeMap<S, X> {
+        type K = kind::Map<X::K>;
+    }
+
+    impl<A: HasKind, B: HasKind> HasKind for (A, B) {
+        type K = kind::Pair<A::K, B::K>;
+    }
+
+    impl ToRV for f32 {
+        fn to_rv(&self) -> RV {
+            (*self as f64).to_rv()
+        }
+    }
+
+    impl<A: ToRV, B: ToRV> ToRV for (A, B) {
+        fn to_rv(&self) -> RV {
+            RV::list(vec![self.0.to_rv(), self.1.to_rv()])
+        }
+    }
+
+    impl<A: FromRV, B: FromRV> FromRV for (A, B) {
+        fn from_rv(v: RVRef) -> Option<Self> {
+            if v.kind() != LIST || v.len() != 2 {
+                return None;
+            }
+            Some((A::from_rv(v.item(0))?, B::from_rv(v.item(1))?))
+        }
+    }
+
+    /// Set of overload candidates, bit c for candidate c
+    pub struct Mask<const B: u64>;
+
+    /// Candidates accepting both
+    pub trait Join<M> {
+        type Out;
+    }
+
+    /// Dictionary with values of any type, see the dict! macro
+    pub struct Dict<'a>(pub Vec<(String, Box<dyn ToRV + 'a>)>);
+
+    impl<'a> Dict<'a> {
+        pub fn new() -> Self {
+            Dict(Vec::new())
+        }
+        pub fn insert(&mut self, key: &str, value: impl ToRV + 'a) {
+            self.0.push((key.to_string(), Box::new(value)));
+        }
+    }
+
+    impl Default for Dict<'_> {
+        fn default() -> Self {
+            Dict::new()
+        }
+    }
+
+    impl ToRV for Dict<'_> {
+        fn to_rv(&self) -> RV {
+            RV::dict(self.0.iter().map(|(k, v)| (k.as_str(), v.to_rv())))
+        }
+    }
+
+    impl HasKind for Dict<'_> {
+        type K = kind::Dict;
+    }
+
+    /// The first output
+    pub fn out1<T: FromRV>(o: Vec<RV>) -> T {
+        take(o.into_iter().next().expect("missing output"))
     }
 
     /// Wrapped C++ object; deletes it on drop when owned
