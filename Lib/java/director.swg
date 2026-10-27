@@ -382,8 +382,10 @@ namespace Swig {
 	  if (getMessageMethodID)
 	    jmsg = (jstring)jenv->CallObjectMethod(throwable, getMessageMethodID);
 	}
-	if (jmsg == NULL && jenv->ExceptionCheck())
+	if (jenv->ExceptionCheck()) {
 	  jenv->ExceptionClear();
+	  jmsg = NULL;
+	}
       }
       return jmsg;
     }
@@ -408,6 +410,10 @@ namespace Swig {
 	    jmethodID getNameMethodID = jenv->GetMethodID(clzclz, "getName", "()Ljava/lang/String;");
 	    if (getNameMethodID) {
 	      jstring jstr_classname = (jstring)(jenv->CallObjectMethod(throwclz, getNameMethodID));
+	      if (jenv->ExceptionCheck()) {
+		jenv->ExceptionClear();
+		jstr_classname = NULL;
+	      }
               // Copy strings, since there is no guarantee that jenv will be active when handled
               if (jstr_classname) {
                 JavaString jsclassname(jenv, jstr_classname);
