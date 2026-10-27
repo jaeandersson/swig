@@ -21,6 +21,7 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <set>
 
 /* Hash type used for upcalls from C/C++ */
 typedef DOH UpcallData;
@@ -55,6 +56,7 @@ class JAVA:public Language {
   bool doxygen;			//flag for converting found doxygen to javadoc
   bool comment_creation_chatter; //flag for getting information about where comments were created in java.cxx
   bool guest_flag;		// Guest-object mode (%pragma(java) guestobjects, see javaguest.swg)
+  Hash *guest_interfaces;	// Guest mode: Java interfaces of each proxy class
   
   String *imclass_name;		// intermediary class name
   String *module_class_name;	// module class name
@@ -139,6 +141,7 @@ public:
       doxygen(false),
       comment_creation_chatter(false),
       guest_flag(false),
+      guest_interfaces(NewHash()),
       imclass_name(NULL),
       module_class_name(NULL),
       constants_interface_name(NULL),
@@ -1050,10 +1053,33 @@ public:
     Delete(doc);
   }
 
+  // A const member with a non-const twin of the same parameters is dropped (as Swig_overload_check does)
+  static bool guestConstTwin(List *entries, Node *n) {
+    String *q = Getattr(n, "qualifier");
+    if (!q || !Strstr(q, "const"))
+      return false;
+    String *ps = ParmList_protostr(Getattr(n, "parms"));
+    bool r = false;
+    for (Iterator e = First(entries); e.item && !r; e = Next(e)) {
+      Node *m = Getattr(e.item, "node");
+      String *qm = Getattr(m, "qualifier");
+      if (m == n || (qm && Strstr(qm, "const")))
+	continue;
+      String *pm = ParmList_protostr(Getattr(m, "parms"));
+      r = Equal(ps, pm) != 0;
+      Delete(pm);
+    }
+    Delete(ps);
+    return r;
+  }
+
   List *guestMerge(List *entries) {
     List *out = NewList();
     int n = Len(entries);
     std::vector<bool> used(n, false);
+    for (int i = 0; i < n; ++i)
+      if (guestConstTwin(entries, Getattr(Getitem(entries, i), "node")))
+	used[i] = true;
     for (int i = 0; i < n; ++i) {
       if (used[i])
 	continue;
@@ -1076,6 +1102,11 @@ public:
       }
     }
     return out;
+  }
+
+  static bool guestHasToken(const String *list, const char *tok) {
+    std::vector<std::string> t = guestTokens(Char(list));
+    return std::find(t.begin(), t.end(), std::string(tok)) != t.end();
   }
 
   static bool guestPrecLess(Hash *a, Hash *b) {
@@ -1129,6 +1160,7 @@ public:
 
     // One type variable T if all members differ only by one class name each
     std::string x0;
+    std::set<std::string> vars;
     std::vector<std::vector<bool> > var(np + 1);
     bool typevar = true;
     for (size_t k = 0; k <= np; ++k)
@@ -1150,6 +1182,8 @@ public:
 	  }
 	  x0 = a[j];
 	  xi = b[j];
+	  vars.insert(a[j]);
+	  vars.insert(b[j]);
 	  var[k][j] = true;
 	}
       }
@@ -1245,7 +1279,13 @@ public:
     int k = 0;
     for (Iterator p = First(Getattr(m, "params")); p.item; p = Next(p), ++k)
       Setattr(p.item, "type", NewString(mtypes[k].c_str()));
+    // The bound applies when every class the type variable stands for implements it
     String *bound = Getattr(n0, "feature:java:typebound");
+    for (std::set<std::string>::iterator v = vars.begin(); bound && v != vars.end(); ++v) {
+      String *ifs = Getattr(guest_interfaces, v->c_str());
+      if (!ifs || !guestHasToken(ifs, Char(bound)))
+	bound = 0;
+    }
     String *tparams = typevar ? (bound ? NewStringf("<T extends %s> ", bound) : NewString("<T> ")) : NewString("");
     const String *methodmods = Getattr(n0, "feature:java:methodmodifiers");
     methodmods = methodmods ? methodmods : (is_public(n0) ? public_string : protected_string);
@@ -2633,6 +2673,8 @@ public:
     if (*Char(interface_list) && *Char(pure_interfaces))
       Append(interface_list, ", ");
     Append(interface_list, pure_interfaces);
+    if (guest_flag)
+      Setattr(guest_interfaces, proxy_class_name, interface_list);
     // Start writing the proxy class
     if (!has_outerclass) // Import statements
       Printv(proxy_class_def, typemapLookup(n, "javaimports", typemap_lookup_type, WARN_NONE),"\n", NIL);
