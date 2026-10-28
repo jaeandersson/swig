@@ -830,6 +830,7 @@ static std::string kindOf(std::string t) {
     if (startsWith(t, "mut ")) t = trim(t.substr(4));
   }
   if (t == "rt::Dict" || startsWith(t, "rt::Dict<")) return "kind::Dict";
+  if (t == "rt::Omit") return "kind::Omit";
   if (startsWith(t, "Vec<") && t[t.size() - 1] == '>')
     return "kind::Vec<" + kindOf(t.substr(4, t.size() - 5)) + ">";
   if ((startsWith(t, "HashMap<") || startsWith(t, "BTreeMap<")) && t[t.size() - 1] == '>') {
@@ -1083,6 +1084,10 @@ std::string RUST::emitForm(const std::string &rname, int k, const std::vector<Ov
   bool result = false;
   for (size_t c = 0; c < cands.size(); ++c) result = result || GetFlag(cands[c]->n, "feature:rust:result");
 
+  /* Positions from the fewest required arguments on also take None: the C++ default */
+  int minreq = k;
+  for (size_t c = 0; c < cands.size(); ++c) minreq = std::min(minreq, cands[c]->req);
+
   std::string generics, params, args;
   if (member) params = "&self";
   if (member) args = "rt::ToRV::to_rv(self)";
@@ -1099,7 +1104,9 @@ std::string RUST::emitForm(const std::string &rname, int k, const std::vector<Ov
     } else if (cands[0]->acc[i][0] == "*") {
       params += std::string(a) + ": impl rt::ToRV";
     } else {
-      params += std::string(a) + ": impl rt::HasKind<K: acc::" + accTrait(cands[0]->acc[i]) + "> + rt::ToRV";
+      std::vector<std::string> acc = cands[0]->acc[i];
+      if (i >= minreq) acc.push_back("rt::Omit");
+      params += std::string(a) + ": impl rt::HasKind<K: acc::" + accTrait(acc) + "> + rt::ToRV";
     }
   }
 
@@ -1119,6 +1126,9 @@ std::string RUST::emitForm(const std::string &rname, int k, const std::vector<Ov
       for (size_t c = 0; c < cands.size() && c < 64; ++c)
 	for (size_t m = 0; m < cands[c]->acc[i].size(); ++m)
 	  if (cands[c]->acc[i][m] != "*") km[kindOf(cands[c]->acc[i][m])] |= 1ULL << c;
+      if (i >= minreq)
+	for (size_t c = 0; c < cands.size() && c < 64; ++c)
+	  if (cands[c]->req <= i) km["kind::Omit"] |= 1ULL << c;
       char pi[16];
       sprintf(pi, "_P%d", i);
       std::string ptrait = sig + pi;

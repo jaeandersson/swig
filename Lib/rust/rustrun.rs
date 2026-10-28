@@ -193,6 +193,13 @@ pub mod rt {
     /// Host value to guest value
     pub trait ToRV {
         fn to_rv(&self) -> RV;
+        /// Conversion of None::<Self>
+        fn none_rv() -> RV
+        where
+            Self: Sized,
+        {
+            RV::nil()
+        }
         /// Conversion of a slice of Self; numeric types override it with a dense column
         fn slice_to_rv(s: &[Self]) -> RV
         where
@@ -278,9 +285,25 @@ pub mod rt {
         fn to_rv(&self) -> RV {
             match self {
                 Some(v) => v.to_rv(),
-                None => RV::nil(),
+                None => T::none_rv(),
             }
         }
+    }
+
+    /// `None` for an argument with a default: the argument is left out
+    pub enum Omit {}
+
+    impl ToRV for Omit {
+        fn to_rv(&self) -> RV {
+            match *self {}
+        }
+        fn none_rv() -> RV {
+            RV(std::ptr::null_mut())
+        }
+    }
+
+    impl HasKind for Option<Omit> {
+        type K = kind::Omit;
     }
 
     impl<K: AsRef<str>, V: ToRV> ToRV for HashMap<K, V> {
@@ -612,6 +635,7 @@ pub mod rt {
     /// Kinds of argument values: overloads are resolved on these at compile time
     pub mod kind {
         use std::marker::PhantomData;
+        pub struct Omit;
         pub struct F64;
         pub struct I64;
         pub struct Bool;
@@ -784,7 +808,17 @@ pub mod rt {
     /// Call a wrapper with converted arguments; returns all outputs
     pub fn call(f: WrapFn, args: Vec<RV>, nout: usize) -> Result<Vec<RV>, Error> {
         init();
+        // Omitted (defaulted) arguments are trailing
         let mut argv: Vec<*mut SwigRV> = args.into_iter().map(|a| a.into_raw()).collect();
+        if let Some(n) = argv.iter().position(|a| a.is_null()) {
+            if argv[n..].iter().any(|a| !a.is_null()) {
+                for a in argv {
+                    unsafe { swig_rv_free(a) };
+                }
+                panic!("an argument after a None (default) argument must be None too");
+            }
+            argv.truncate(n);
+        }
         let mut resv: Vec<*mut SwigRV> = vec![std::ptr::null_mut(); nout.max(1)];
         let flag = unsafe {
             swig_rv_clear_error();
