@@ -1301,13 +1301,21 @@ int RUST::classHandler(Node *n) {
     names.insert(own[i].name);
     Printf(f_rs_classes, "%s", own[i].code.c_str());
   }
-  List *bases = Getattr(n, "allbases");
-  for (int b = 0; bases && b < Len(bases); ++b) {
-    std::vector<Snippet> &inh = class_snippets[(Node *)Getitem(bases, b)];
-    for (size_t i = 0; i < inh.size(); ++i) {
-      if (!inh[i].inherit || names.count(inh[i].name)) continue;
-      names.insert(inh[i].name);
-      Printf(f_rs_classes, "%s", inh[i].code.c_str());
+  /* Breadth-first over bases ("allbases" misses %template grandparents) */
+  std::vector<Node *> queue(1, n);
+  std::set<Node *> seen(queue.begin(), queue.end());
+  for (size_t q = 0; q < queue.size(); ++q) {
+    List *bases = Getattr(queue[q], "bases");
+    for (int b = 0; bases && b < Len(bases); ++b) {
+      Node *base = Getitem(bases, b);
+      if (!seen.insert(base).second) continue;
+      queue.push_back(base);
+      std::vector<Snippet> &inh = class_snippets[base];
+      for (size_t i = 0; i < inh.size(); ++i) {
+	if (!inh[i].inherit || names.count(inh[i].name)) continue;
+	names.insert(inh[i].name);
+	Printf(f_rs_classes, "%s", inh[i].code.c_str());
+      }
     }
   }
   Printf(f_rs_classes, "}\n\n");
