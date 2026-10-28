@@ -7,22 +7,41 @@
  * only a cell holding the pointer, so it does not keep the proxy alive; giving
  * up ownership empties the cell.  delete() and close() (AutoCloseable) run the
  * action at most once.  Cleaning actions are skipped once the JVM shuts down.
+ * The cleaner thread only queues deletes; they run on the next application thread
+ * that creates a proxy, so destructors never run concurrently with native calls.
  *
  * Usage: %include <javacleaner.swg> before the wrapped classes.
  * ----------------------------------------------------------------------------- */
 
 %pragma(java) jniclasscode=%{
-  private final static java.lang.ref.Cleaner SWIG_CLEANER = java.lang.ref.Cleaner.create();
+  private static volatile Thread swigCleanerThread;
+  private final static java.lang.ref.Cleaner SWIG_CLEANER = java.lang.ref.Cleaner.create(r -> {
+    Thread t = new Thread(r, "SWIG-Cleaner");
+    t.setDaemon(true);
+    swigCleanerThread = t;
+    return t;
+  });
+  /* Deletes of unreachable proxies, run on the next application thread that creates a proxy */
+  private final static java.util.concurrent.ConcurrentLinkedQueue<Runnable> SWIG_PENDING = new java.util.concurrent.ConcurrentLinkedQueue<>();
   private static volatile boolean swigShutdown = false;
   static {
     Runtime.getRuntime().addShutdownHook(new Thread(() -> swigShutdown = true));
   }
+  static void swigDrain() {
+    for (Runnable r; (r = SWIG_PENDING.poll()) != null;) r.run();
+  }
   /* Registers a cleaning action for obj; cell[0] holds the pointer to delete, 0 for none */
   static java.lang.ref.Cleaner.Cleanable swigRegister(Object obj, long[] cell, java.util.function.LongConsumer delete) {
+    swigDrain();
     return SWIG_CLEANER.register(obj, () -> {
       long p = cell[0];
       cell[0] = 0;
-      if (p != 0 && delete != null && !swigShutdown) delete.accept(p);
+      if (p == 0 || delete == null || swigShutdown) return;
+      if (Thread.currentThread() == swigCleanerThread) {
+        SWIG_PENDING.add(() -> { if (!swigShutdown) delete.accept(p); });
+      } else {
+        delete.accept(p);
+      }
     });
   }
 %}

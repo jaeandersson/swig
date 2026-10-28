@@ -81,5 +81,16 @@ public class java_guest_object_runme {
     check(true, "double close is a no-op");
     try { c2.size(); check(false, "call on a closed proxy throws"); }
     catch (IllegalStateException e) { check(e.getMessage().contains("closed"), "call on a closed proxy throws: " + e); }
+
+    // Cleaner thread only queues deletes; creating proxies on this thread runs them
+    java_guest_object.tracked_set_thread();
+    for (int i = 0; i < 1000; ++i) new Tracked();
+    for (int k = 0; k < 50 && java_guest_object.tracked_alive_count() > 500; ++k) {
+      System.gc();
+      try { Thread.sleep(20); } catch (InterruptedException e) {}
+      java_guest_object.twice(new Vec(k));
+    }
+    check(java_guest_object.tracked_alive_count() <= 500, "unreachable proxies deleted: " + java_guest_object.tracked_alive_count() + " alive");
+    check(java_guest_object.tracked_deleted_off_thread() == 0, "no destructor on the cleaner thread: " + java_guest_object.tracked_deleted_off_thread());
   }
 }

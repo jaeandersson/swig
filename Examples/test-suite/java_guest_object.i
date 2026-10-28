@@ -204,3 +204,18 @@ static int guest_init_ran = 0;
 %inline %{
 int init_ran() { return guest_init_ran; }
 %}
+
+// Destructors of unreachable proxies run on application threads, never on the cleaner thread
+%{
+static std::thread::id tracked_tid;
+static std::atomic<int> tracked_alive(0), tracked_off_thread(0);
+%}
+%inline %{
+struct Tracked {
+  Tracked() { ++tracked_alive; }
+  ~Tracked() { --tracked_alive; if (std::this_thread::get_id() != tracked_tid) ++tracked_off_thread; }
+};
+void tracked_set_thread() { tracked_tid = std::this_thread::get_id(); }
+int tracked_alive_count() { return tracked_alive; }
+int tracked_deleted_off_thread() { return tracked_off_thread; }
+%}
