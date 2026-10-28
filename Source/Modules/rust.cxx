@@ -105,6 +105,7 @@ private:
   };
 
   void dispatchFunction(Node *n);
+  std::string emitGroup(std::vector<Overload> &ovs, const std::string &base, const std::string &ename, int num_returns, bool member);
   void addEntry(String *iname, String *wname, int num_returns, Node *n);
   String *rustIdent(const_String_or_char_ptr name);
   std::string ident(const std::string &name);
@@ -1157,6 +1158,39 @@ std::string RUST::emitForm(const std::string &rname, int k, const std::vector<Ov
   return code;
 }
 
+/* Names an overload group: plain = fewest arguments, _with = most, numbered otherwise */
+std::string RUST::emitGroup(std::vector<Overload> &ovs, const std::string &base, const std::string &ename, int num_returns, bool member) {
+  std::string code;
+  if (ovs.empty()) return code;
+  /* Plain: fewest arguments; _with: most arguments */
+  int kmin = ovs[0].req, kmax = ovs[0].nin;
+  for (size_t i = 1; i < ovs.size(); ++i) {
+    kmin = std::min(kmin, ovs[i].req);
+    kmax = std::max(kmax, ovs[i].nin);
+  }
+  std::map<int, std::string> forms;
+  forms[kmin] = base;
+  if (kmax != kmin) forms[kmax] = base + "_with";
+  for (size_t i = 0; i < ovs.size(); ++i) {
+    bool covered = (ovs[i].req <= kmin && kmin <= ovs[i].nin) || (ovs[i].req <= kmax && kmax <= ovs[i].nin);
+    if (!covered && !forms.count(ovs[i].nin)) {
+	char buf[16];
+	sprintf(buf, "_%d", ovs[i].nin);
+	forms[ovs[i].nin] = base + buf;
+	String *decl = Swig_name_decl(ovs[i].n);
+	Swig_warning(WARN_LANG_OVERLOAD_IGNORED, input_file, line_number, "Rust: %s wrapped as %s%s (no plain or _with form takes %d arguments).\n", decl, base.c_str(), buf, ovs[i].nin);
+	Delete(decl);
+    }
+  }
+  for (std::map<int, std::string>::iterator f = forms.begin(); f != forms.end(); ++f) {
+    std::vector<Overload *> cands;
+    for (size_t i = 0; i < ovs.size(); ++i)
+	if (ovs[i].req <= f->first && f->first <= ovs[i].nin) cands.push_back(&ovs[i]);
+    code += emitForm(ident(f->second), f->first, cands, ename, num_returns, member);
+  }
+  return code;
+}
+
 void RUST::emitTyped(Node *n, const std::string &ename, int num_returns) {
   /* Destructors run from Drop */
   if (Cmp(Getattr(n, "nodeType"), "destructor") == 0) return;
@@ -1218,35 +1252,36 @@ void RUST::emitTyped(Node *n, const std::string &ename, int num_returns) {
     ovs = rest;
   }
 
-  std::string code = skipped;
-  if (!ovs.empty()) {
-    /* Plain: fewest arguments; _with: most arguments */
-    int kmin = ovs[0].req, kmax = ovs[0].nin;
-    for (size_t i = 1; i < ovs.size(); ++i) {
-      kmin = std::min(kmin, ovs[i].req);
-      kmax = std::max(kmax, ovs[i].nin);
-    }
-    std::map<int, std::string> forms;
-    forms[kmin] = base;
-    if (kmax != kmin) forms[kmax] = base + "_with";
-    for (size_t i = 0; i < ovs.size(); ++i) {
-      bool covered = (ovs[i].req <= kmin && kmin <= ovs[i].nin) || (ovs[i].req <= kmax && kmax <= ovs[i].nin);
-      if (!covered && !forms.count(ovs[i].nin)) {
-	char buf[16];
-	sprintf(buf, "_%d", ovs[i].nin);
-	forms[ovs[i].nin] = base + buf;
-	String *decl = Swig_name_decl(ovs[i].n);
-	Swig_warning(WARN_LANG_OVERLOAD_IGNORED, input_file, line_number, "Rust: %s wrapped as %s%s (no plain or _with form takes %d arguments).\n", decl, base.c_str(), buf, ovs[i].nin);
-	Delete(decl);
+  /* List twins: a std::vector<T> parameter where a sibling takes T are named <base>_list */
+  std::vector<Overload> plain, twins;
+  for (size_t i = 0; i < ovs.size(); ++i) {
+    bool twin = false;
+    for (size_t p = 0; !twin && p < ovs[i].acc.size(); ++p) {
+      const std::vector<std::string> &a = ovs[i].acc[p];
+      std::set<std::string> elems;
+      bool all_vec = !a.empty();
+      for (size_t m = 0; all_vec && m < a.size(); ++m) {
+	all_vec = a[m].compare(0, 4, "Vec<") == 0;
+	if (all_vec) elems.insert(a[m].substr(4, a[m].size() - 5));
+      }
+      /* Lists of numbers are values, not repetitions (offsets vs an increment) */
+      std::string first = all_vec ? a[0].substr(4, a[0].size() - 5) : "";
+      if (!all_vec || first == "f64" || first == "i64" || first == "bool" || first == "String") continue;
+      for (size_t j = 0; !twin && j < ovs.size(); ++j) {
+	if (j == i || ovs[j].acc.size() <= p) continue;
+	std::set<std::string> sib(ovs[j].acc[p].begin(), ovs[j].acc[p].end());
+	bool same = sib.count(first) > 0;
+	for (std::set<std::string>::iterator e = elems.begin(); same && e != elems.end(); ++e) same = sib.count(*e) || e->compare(0, 4, "Vec<") == 0;
+	for (size_t q = 0; same && q < p; ++q) same = ovs[j].acc[q] == ovs[i].acc[q];
+	twin = same;
       }
     }
-    for (std::map<int, std::string>::iterator f = forms.begin(); f != forms.end(); ++f) {
-      std::vector<Overload *> cands;
-      for (size_t i = 0; i < ovs.size(); ++i)
-	if (ovs[i].req <= f->first && f->first <= ovs[i].nin) cands.push_back(&ovs[i]);
-      code += emitForm(ident(f->second), f->first, cands, ename, num_returns, member);
-    }
+    (twin ? twins : plain).push_back(ovs[i]);
   }
+
+  std::string code = skipped;
+  code += emitGroup(plain, base, ename, num_returns, member);
+  code += emitGroup(twins, base + "_list", ename, num_returns, member);
 
   if (class_node && cur_kind != CK_GLOBAL) {
     Snippet s;
