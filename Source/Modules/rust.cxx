@@ -1434,6 +1434,10 @@ int RUST::classHandler(Node *n) {
   Printf(f_rs_classes, "}\n\n");
 
   Printf(f_rs_classes, "%s", class_traits[n].c_str());
+  /* Dicts keep moved values, or clones of referenced ones */
+  Printf(f_rs_classes, "impl rt::DictValue for %s {\n    fn into_boxed(self) -> Box<dyn rt::ToRV> {\n        Box::new(self)\n    }\n}\n\n", rname);
+  if (class_traits[n].find("impl Clone for") != std::string::npos)
+    Printf(f_rs_classes, "impl rt::DictRef for %s {\n    fn boxed(&self) -> Box<dyn rt::ToRV> {\n        Box::new(self.clone())\n    }\n}\n\n", rname);
   Printf(f_rs_classes, "impl rt::ToRV for %s {\n", rname);
   Printf(f_rs_classes, "    fn to_rv(&self) -> rt::RV {\n");
   Printf(f_rs_classes, "        self.h.to_rv()\n");

@@ -720,30 +720,156 @@ pub mod rt {
     }
 
     /// Dictionary with values of any type, see the dict! macro
-    pub struct Dict<'a>(pub Vec<(String, Box<dyn ToRV + 'a>)>);
+    /// Values a Dict takes; it keeps them (moved, or copied from a reference), so it borrows nothing
+    pub trait DictValue {
+        fn into_boxed(self) -> Box<dyn ToRV>;
+    }
 
-    impl<'a> Dict<'a> {
-        pub fn new() -> Self {
-            Dict(Vec::new())
-        }
-        pub fn insert(&mut self, key: &str, value: impl ToRV + 'a) {
-            self.0.push((key.to_string(), Box::new(value)));
+    /// Values a Dict copies when given a reference
+    pub trait DictRef {
+        fn boxed(&self) -> Box<dyn ToRV>;
+    }
+
+    impl<T: DictRef + ?Sized> DictValue for &T {
+        fn into_boxed(self) -> Box<dyn ToRV> {
+            self.boxed()
         }
     }
 
-    impl Default for Dict<'_> {
+    impl<T: DictRef + ?Sized> DictValue for &mut T {
+        fn into_boxed(self) -> Box<dyn ToRV> {
+            self.boxed()
+        }
+    }
+
+    impl<T: DictRef + ?Sized> DictRef for &T {
+        fn boxed(&self) -> Box<dyn ToRV> {
+            (**self).boxed()
+        }
+    }
+
+    impl<T: ToRV + ?Sized> ToRV for Box<T> {
+        fn to_rv(&self) -> RV {
+            (**self).to_rv()
+        }
+    }
+
+    macro_rules! dict_value_clone {
+        ($($t:ty),*) => {$(
+            impl DictValue for $t {
+                fn into_boxed(self) -> Box<dyn ToRV> {
+                    Box::new(self)
+                }
+            }
+            impl DictRef for $t {
+                fn boxed(&self) -> Box<dyn ToRV> {
+                    Box::new(self.clone())
+                }
+            }
+        )*};
+    }
+    dict_value_clone!(f64, i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, bool, String, Value);
+
+    impl DictRef for str {
+        fn boxed(&self) -> Box<dyn ToRV> {
+            Box::new(self.to_string())
+        }
+    }
+
+    impl<T: DictRef> DictRef for [T] {
+        fn boxed(&self) -> Box<dyn ToRV> {
+            Box::new(self.iter().map(|v| v.boxed()).collect::<Vec<_>>())
+        }
+    }
+
+    impl<T: DictRef> DictRef for Vec<T> {
+        fn boxed(&self) -> Box<dyn ToRV> {
+            self.as_slice().boxed()
+        }
+    }
+
+    impl<T: DictValue> DictValue for Vec<T> {
+        fn into_boxed(self) -> Box<dyn ToRV> {
+            Box::new(self.into_iter().map(|v| v.into_boxed()).collect::<Vec<_>>())
+        }
+    }
+
+    impl<T: DictRef, const N: usize> DictRef for [T; N] {
+        fn boxed(&self) -> Box<dyn ToRV> {
+            self.as_slice().boxed()
+        }
+    }
+
+    impl<T: DictValue, const N: usize> DictValue for [T; N] {
+        fn into_boxed(self) -> Box<dyn ToRV> {
+            Box::new(self.into_iter().map(|v| v.into_boxed()).collect::<Vec<_>>())
+        }
+    }
+
+    impl<T: DictValue> DictValue for Option<T> {
+        fn into_boxed(self) -> Box<dyn ToRV> {
+            match self {
+                Some(v) => v.into_boxed(),
+                None => Box::new(Value::None),
+            }
+        }
+    }
+
+    impl<K: AsRef<str>, V: DictValue> DictValue for HashMap<K, V> {
+        fn into_boxed(self) -> Box<dyn ToRV> {
+            Box::new(Dict(self.into_iter().map(|(k, v)| (k.as_ref().to_string(), v.into_boxed())).collect()))
+        }
+    }
+
+    impl<K: AsRef<str>, V: DictRef> DictRef for HashMap<K, V> {
+        fn boxed(&self) -> Box<dyn ToRV> {
+            Box::new(Dict(self.iter().map(|(k, v)| (k.as_ref().to_string(), v.boxed())).collect()))
+        }
+    }
+
+    impl<K: AsRef<str>, V: DictValue> DictValue for BTreeMap<K, V> {
+        fn into_boxed(self) -> Box<dyn ToRV> {
+            Box::new(Dict(self.into_iter().map(|(k, v)| (k.as_ref().to_string(), v.into_boxed())).collect()))
+        }
+    }
+
+    impl<A: DictValue, B: DictValue> DictValue for (A, B) {
+        fn into_boxed(self) -> Box<dyn ToRV> {
+            Box::new((self.0.into_boxed(), self.1.into_boxed()))
+        }
+    }
+
+    /// Dictionary of values of any type, e.g. options; built with dict!
+    pub struct Dict(pub Vec<(String, Box<dyn ToRV>)>);
+
+    impl Dict {
+        pub fn new() -> Self {
+            Dict(Vec::new())
+        }
+        pub fn insert(&mut self, key: &str, value: impl DictValue) {
+            self.0.push((key.to_string(), value.into_boxed()));
+        }
+    }
+
+    impl Default for Dict {
         fn default() -> Self {
             Dict::new()
         }
     }
 
-    impl ToRV for Dict<'_> {
+    impl DictValue for Dict {
+        fn into_boxed(self) -> Box<dyn ToRV> {
+            Box::new(self)
+        }
+    }
+
+    impl ToRV for Dict {
         fn to_rv(&self) -> RV {
             RV::dict(self.0.iter().map(|(k, v)| (k.as_str(), v.to_rv())))
         }
     }
 
-    impl HasKind for Dict<'_> {
+    impl HasKind for Dict {
         type K = kind::Dict;
     }
 
