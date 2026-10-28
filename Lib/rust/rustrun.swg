@@ -59,7 +59,7 @@ SWIGRUNTIME int SWIG_check_num_args(const char *func_name, int num_args, int max
 #define SWIG_fail goto fail
 
 /* Value kinds and numeric element types */
-enum { SWIG_RV_NIL = 0, SWIG_RV_NUM = 1, SWIG_RV_STR = 2, SWIG_RV_LIST = 3, SWIG_RV_DICT = 4, SWIG_RV_PTR = 5, SWIG_RV_FUN = 6 };
+enum { SWIG_RV_NIL = 0, SWIG_RV_NUM = 1, SWIG_RV_STR = 2, SWIG_RV_LIST = 3, SWIG_RV_DICT = 4, SWIG_RV_PTR = 5, SWIG_RV_FUN = 6, SWIG_RV_BASE = 7, SWIG_RV_ERR = 8 };
 enum { SWIG_RV_F64 = 0, SWIG_RV_I64 = 1, SWIG_RV_BOOL = 2 };
 
 /* Host callable: invoke(ctx, argc, argv) returns a new value or 0 on error; drop(ctx) releases it */

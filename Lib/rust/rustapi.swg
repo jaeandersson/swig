@@ -42,6 +42,9 @@ SWIGEXPORT SwigRV* swig_rv_new_sparse(long long rows, long long cols, const long
   return v;
 }
 SWIGEXPORT SwigRV* swig_rv_new_str(const char *s, size_t n) { return SWIG_Rust_NewStr(s, n); }
+/* Director results: run the C++ implementation, or fail with a message */
+SWIGEXPORT SwigRV* swig_rv_new_base() { SwigRV *v = new SwigRV(); v->kind = SWIG_RV_BASE; return v; }
+SWIGEXPORT SwigRV* swig_rv_new_err(const char *s, size_t n) { SwigRV *v = SWIG_Rust_NewStr(s, n); v->kind = SWIG_RV_ERR; return v; }
 SWIGEXPORT SwigRV* swig_rv_new_list(size_t n) { return SWIG_Rust_NewList(n); }
 /* Takes ownership of item */
 SWIGEXPORT void swig_rv_list_set(SwigRV *l, size_t i, SwigRV *item) { delete l->items[i]; l->items[i] = item; }

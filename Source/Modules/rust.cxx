@@ -45,6 +45,13 @@ public:
   virtual int functionWrapper(Node *n);
   virtual int variableWrapper(Node *n);
   virtual int constantWrapper(Node *n);
+  virtual int classDirectorInit(Node *n);
+  virtual int classDirectorEnd(Node *n);
+  virtual int classDirectorConstructor(Node *n);
+  virtual int classDirectorDefaultConstructor(Node *n);
+  virtual int classDirectorMethod(Node *n, Node *parent, String *super);
+  virtual int classDirectorDisown(Node *n);
+  void emitDirectorTrait(Node *n, String *rname);
   virtual int enumDeclaration(Node *n);
   virtual int enumvalueDeclaration(Node *n);
   virtual int classHandler(Node *n);
@@ -95,6 +102,14 @@ private:
   std::map<std::string, std::string> acc_traits;
   int sig_count;
   std::set<std::string> global_names;
+  /* SWIG type name -> Rust class with a delete wrapper, for objects in dynamic values */
+  std::map<std::string, std::string> object_deleters;
+  /* Director methods per class, for the Rust trait: name, argument types, return type */
+  struct DirMethod {
+    std::string name, ret;
+    std::vector<std::string> args, names;
+  };
+  std::map<std::string, std::vector<DirMethod> > dir_methods;
   /* Enum values known at generation time; enum_next < 0 once an initializer is not a literal */
   std::map<std::string, long long> enum_values;
   long long enum_next;
@@ -138,6 +153,16 @@ RUST::RUST() :
   f_rs_kinds(0), f_rs_acc(0), f_rs_sigs(0), f_rs_globals(0),
   module_name(0), class_name(0), class_node(0), class_has_destructor(false),
   cur_kind(CK_GLOBAL), cur_name(0), sig_count(0) {
+  /* Directors: the constructor gets the Rust closure as hidden first argument */
+  Delete(none_comparison);
+  none_comparison = NewString("$arg && $arg->kind == SWIG_RV_FUN");
+  director_prot_ctor_code = NewString("");
+  Printv(director_prot_ctor_code,
+	 "if ( $comparison ) { /* subclassed */\n",
+	 "  $director_new \n",
+	 "} else {\n", "  SWIG_exception_fail(SWIG_RuntimeError, \"accessing abstract class or protected constructor\");\n", "}\n", NIL);
+  director_multiple_inheritance = 1;
+  directorLanguage();
 }
 
 void RUST::main(int argc, char *argv[]) {
@@ -198,10 +223,18 @@ int RUST::top(Node *n) {
   Swig_register_filebyname("rustruntime", f_rs_runtime);
   Swig_register_filebyname("rust", f_rs_code);
 
+  Node *mod = Getattr(n, "module");
+  Node *options = mod ? Getattr(mod, "options") : 0;
+  if (options && Getattr(options, "directors"))
+    allow_directors();
+
   Swig_banner(f_begin);
   Printf(f_runtime, "\n\n#ifndef SWIGRUST\n#define SWIGRUST\n#endif\n\n");
 
   Language::top(n);
+
+  if (Swig_directors_enabled())
+    Swig_insert_file("director.swg", f_runtime);
 
   SwigType_emit_type_table(f_runtime, f_wrappers);
 
@@ -264,6 +297,12 @@ int RUST::top(Node *n) {
   Printf(f_rs, "}\n\n");
   Printf(f_rs, "%s", f_rs_classes);
   Printf(f_rs, "%s", f_rs_globals);
+  /* Delete wrappers by SWIG type name, for objects held by rt::Value */
+  Printf(f_rs, "\n/// The delete wrapper of a wrapped class, by SWIG type name\n");
+  Printf(f_rs, "pub fn object_deleter(ty: &str) -> Option<rt::WrapFn> {\n    match ty {\n");
+  for (std::map<std::string, std::string>::iterator it = object_deleters.begin(); it != object_deleters.end(); ++it)
+    Printf(f_rs, "        \"%s\" => Some(ffi::swigrs_delete_%s),\n", it->first.c_str(), it->second.c_str());
+  Printf(f_rs, "        _ => None,\n    }\n}\n\n");
   Printf(f_rs, "%s", f_rs_code);
   Delete(f_rs);
   Delete(rsfile);
@@ -486,6 +525,16 @@ int RUST::functionWrapper(Node *n) {
   }
 
   Setattr(n, "wrap:name", overname);
+
+  /* A call from Rust on a director object runs the C++ implementation */
+  int director_method = is_member_director(n) && !is_smart_pointer() && !destructor;
+  if (director_method) {
+    Wrapper_add_local(f, "director", "Swig::Director *director = 0");
+    Append(f->code, "director = SWIG_DIRECTOR_CAST(arg1);\n");
+    Wrapper_add_local(f, "upcall", "bool upcall = false");
+    Append(f->code, "upcall = (director != 0);\n");
+  }
+  Swig_director_emit_dynamic_cast(n, f);
 
   if (destructor) {
     Append(f->code, "if (is_owned) {\n");
@@ -742,6 +791,211 @@ int RUST::constantWrapper(Node *n) {
   return SWIG_OK;
 }
 
+
+/* ------------------------------------------------------------
+ * Directors: virtual methods call the Rust closure of the object
+ * ------------------------------------------------------------ */
+
+static SwigType *rvPointerType() {
+  SwigType *t = NewString("SwigRV");
+  SwigType_add_pointer(t);
+  return t;
+}
+
+int RUST::classDirectorInit(Node *n) {
+  String *declaration = Swig_director_declaration(n);
+  Printf(f_directors_h, "\n%s\npublic:\n", declaration);
+  Delete(declaration);
+  return Language::classDirectorInit(n);
+}
+
+int RUST::classDirectorEnd(Node *n) {
+  Printf(f_directors_h, "};\n\n");
+  return Language::classDirectorEnd(n);
+}
+
+int RUST::classDirectorConstructor(Node *n) {
+  Node *parent = Getattr(n, "parentNode");
+  String *decl = Getattr(n, "decl");
+  String *supername = Swig_class_name(parent);
+  String *classname = NewStringf("SwigDirector_%s", supername);
+  ParmList *superparms = Getattr(n, "parms");
+  /* Skip the hidden self argument if constructorHandler already added it */
+  if (superparms && Getattr(superparms, "name") && Cmp(Getattr(superparms, "name"), "self") == 0 && Strstr(Getattr(superparms, "type"), "SwigRV"))
+    superparms = nextSibling(superparms);
+  ParmList *parms = CopyParmList(superparms);
+  Parm *p = NewParm(rvPointerType(), NewString("self"), n);
+  set_nextSibling(p, parms);
+  parms = p;
+  if (!Getattr(n, "defaultargs")) {
+    Wrapper *w = NewWrapper();
+    String *basetype = Getattr(parent, "classtype");
+    String *target = Swig_method_decl(0, decl, classname, parms, 0);
+    String *call = Swig_csuperclass_call(0, basetype, superparms);
+    Printf(w->def, "%s::%s: %s, Swig::Director(self) {\n}\n", classname, target, call);
+    Wrapper_print(w, f_directors);
+    Delete(target);
+    Delete(call);
+    DelWrapper(w);
+    target = Swig_method_decl(0, decl, classname, parms, 1);
+    Printf(f_directors_h, "    %s;\n", target);
+    Delete(target);
+  }
+  Delete(classname);
+  Delete(supername);
+  Delete(parms);
+  return Language::classDirectorConstructor(n);
+}
+
+int RUST::classDirectorDefaultConstructor(Node *n) {
+  String *classname = Swig_class_name(n);
+  Printf(f_directors, "SwigDirector_%s::SwigDirector_%s(SwigRV *self) : Swig::Director(self) {\n}\n", classname, classname);
+  Printf(f_directors_h, "    SwigDirector_%s(SwigRV *self);\n", classname);
+  Delete(classname);
+  return Language::classDirectorDefaultConstructor(n);
+}
+
+int RUST::classDirectorDisown(Node *n) {
+  (void)n;
+  return SWIG_OK;
+}
+
+int RUST::classDirectorMethod(Node *n, Node *parent, String *super) {
+  String *decl = Getattr(n, "decl");
+  String *name = Getattr(n, "name");
+  String *classname = Getattr(parent, "sym:name");
+  String *c_classname = Getattr(parent, "name");
+  String *symname = Getattr(n, "sym:name");
+  ParmList *l = Getattr(n, "parms");
+  String *returntype = Getattr(n, "type");
+  bool pure_virtual = Cmp(Getattr(n, "storage"), "virtual") == 0 && Cmp(Getattr(n, "value"), "0") == 0;
+  bool ignored_method = GetFlag(n, "feature:ignore") ? true : false;
+  bool is_void = !Cmp(returntype, "void") && !SwigType_ispointer_return(decl);
+
+  Wrapper *w = NewWrapper();
+  String *pclassname = NewStringf("SwigDirector_%s", classname);
+  String *qualified_name = NewStringf("%s::%s", pclassname, name);
+  SwigType *rtype = Getattr(n, "conversion_operator") ? 0 : Getattr(n, "classDirectorMethods:type");
+  String *target = Swig_method_decl(rtype, decl, qualified_name, l, 0);
+  Printf(w->def, "%s {", target);
+  Delete(target);
+  target = Swig_method_decl(rtype, decl, name, l, 1);
+  String *declaration = NewStringf("    virtual %s;\n", target);
+  Delete(target);
+
+  String *super_call = Swig_method_call(super, l);
+  String *base_code = NewString("");
+  if (pure_virtual)
+    Printf(base_code, "Swig::DirectorPureVirtualException::raise(\"Attempted to invoke pure virtual method %s::%s\");\n", SwigType_namestr(c_classname), SwigType_namestr(name));
+  else
+    Printf(base_code, is_void ? "%s;\nreturn;\n" : "return %s;\n", super_call);
+
+  int status = SWIG_OK;
+  DirMethod dm;
+  dm.name = Char(name);
+  if (ignored_method) {
+    Printv(w->code, base_code, NIL);
+  } else {
+    if (!is_void) {
+      String *cres = SwigType_lstr(returntype, "c_result");
+      Printf(w->code, "%s;\n", cres);
+      Delete(cres);
+    }
+    Swig_director_parms_fixup(l);
+    Swig_typemap_attach_parms("in", l, 0);
+    Swig_typemap_attach_parms("directorin", l, w);
+    String *wrap_args = NewString("");
+    String *arglist = NewString("");
+    int idx = 0;
+    for (Parm *p = l; p;) {
+      if (checkAttribute(p, "tmap:in:numinputs", "0")) {
+	p = Getattr(p, "tmap:in:next");
+	continue;
+      }
+      String *tm = Getattr(p, "tmap:directorin");
+      if (!tm) {
+	Swig_warning(WARN_TYPEMAP_DIRECTORIN_UNDEF, input_file, line_number, "Unable to use type %s as a function argument in director method %s::%s (not overridable from Rust).\n",
+		     SwigType_str(Getattr(p, "type"), 0), SwigType_namestr(c_classname), SwigType_namestr(name));
+	status = SWIG_NOWRAP;
+	break;
+      }
+      char source[32];
+      sprintf(source, "obj%d", idx++);
+      tm = Copy(tm);
+      Replaceall(tm, "$input", source);
+      Replaceall(tm, "$owner", "0");
+      Printf(wrap_args, "SwigRV *%s = 0;\n%s\n", source, tm);
+      Printf(arglist, "%s%s", Len(arglist) ? ", " : "", source);
+      dm.args.push_back(rsOut(Getattr(p, "type")));
+      dm.names.push_back(Getattr(p, "name") ? ident(Char(Getattr(p, "name"))) : "");
+      Delete(tm);
+      p = Getattr(p, "tmap:directorin:next");
+    }
+    String *out_code = NewString("");
+    if (status == SWIG_OK && !is_void) {
+      String *tm = Swig_typemap_lookup("directorout", n, "c_result", w);
+      if (!tm) {
+	Swig_warning(WARN_TYPEMAP_DIRECTOROUT_UNDEF, input_file, line_number, "Unable to use return type %s in director method %s::%s (not overridable from Rust).\n",
+		     SwigType_str(returntype, 0), SwigType_namestr(c_classname), SwigType_namestr(name));
+	status = SWIG_NOWRAP;
+      } else {
+	Replaceall(tm, "$input", "swig_upres");
+	Replaceall(tm, "$result", "c_result");
+	Printv(out_code, tm, "\n", NIL);
+      }
+      dm.ret = rsOut(returntype);
+    }
+    if (status == SWIG_OK) {
+      Printv(w->code, wrap_args, NIL);
+      if (idx)
+	Printf(w->code, "SwigRV *swig_argv[%d] = {%s};\n", idx, arglist);
+      else
+	Printf(w->code, "SwigRV **swig_argv = 0;\n");
+      Printf(w->code, "Swig::UpcallGuard swig_guard(swig_get_self());\n");
+      Printf(w->code, "SwigRV *swig_upres = Swig::upcall(swig_get_self(), \"%s\", %d, swig_argv);\n", name, idx);
+      Printf(w->code, "if (swig_upres->kind == SWIG_RV_BASE) {\ndelete swig_upres;\n%s}\n", base_code);
+      Printf(w->code, "if (swig_upres->kind == SWIG_RV_ERR) {\nstd::string swig_msg = swig_upres->str;\ndelete swig_upres;\nthrow Swig::DirectorMethodException(swig_msg);\n}\n");
+      Printf(w->code, "try {\n%s} catch (...) {\ndelete swig_upres;\nthrow;\n}\n", out_code);
+      Printf(w->code, "delete swig_upres;\n");
+      if (!is_void) {
+	String *rettype = SwigType_str(returntype, 0);
+	Printf(w->code, "return (%s) c_result;\n", rettype);
+	Delete(rettype);
+      }
+    }
+    Delete(wrap_args);
+    Delete(arglist);
+    Delete(out_code);
+  }
+  if (status != SWIG_OK) {
+    /* Not overridable: the director class keeps the C++ implementation */
+    DelWrapper(w);
+    Delete(declaration);
+    Delete(base_code);
+    Delete(super_call);
+    Delete(pclassname);
+    Delete(qualified_name);
+    return SWIG_OK;
+  }
+  Append(w->code, "}\n");
+  Replaceall(w->code, "$symname", symname);
+  Wrapper_print(w, f_directors);
+  Printv(f_directors_h, declaration, NIL);
+  if (!ignored_method) {
+    bool mappable = (is_void || !dm.ret.empty());
+    for (size_t i = 0; i < dm.args.size(); ++i) mappable = mappable && !dm.args[i].empty();
+    if (is_void) dm.ret = "()";
+    if (mappable) dir_methods[Char(classname)].push_back(dm);
+  }
+  DelWrapper(w);
+  Delete(declaration);
+  Delete(base_code);
+  Delete(super_call);
+  Delete(pclassname);
+  Delete(qualified_name);
+  return SWIG_OK;
+}
+
 /* ------------------------------------------------------------
  * Handlers: record what kind of function is being wrapped
  * ------------------------------------------------------------ */
@@ -774,6 +1028,14 @@ int RUST::staticmemberfunctionHandler(Node *n) {
 int RUST::constructorHandler(Node *n) {
   cur_kind = CK_CTOR;
   cur_name = Getattr(n, "sym:name");
+  if (Swig_directorclass(n)) {
+    /* Hidden first argument: the closure implementing the virtual methods */
+    Parm *self = NewParm(rvPointerType(), NewString("self"), n);
+    set_nextSibling(self, Getattr(n, "parms"));
+    Setattr(n, "parms", self);
+    Setattr(n, "wrap:self", "1");
+    Delete(self);
+  }
   int r = Language::constructorHandler(n);
   cur_kind = CK_GLOBAL;
   return r;
@@ -1371,6 +1633,46 @@ void RUST::emitTyped(Node *n, const std::string &ename, int num_returns) {
   }
 }
 
+/* Trait with the overridable methods of a director class; defaults run the C++ implementation */
+void RUST::emitDirectorTrait(Node *n, String *rname) {
+  (void)n;
+  std::vector<DirMethod> &ms = dir_methods[Char(class_name)];
+  std::string trait = std::string(Char(rname)) + "Impl";
+  std::string decls, arms;
+  std::set<std::string> used;
+  for (size_t i = 0; i < ms.size(); ++i) {
+    std::string fname = ident(ms[i].name);
+    for (int k = 2; used.count(fname); ++k) {
+      char b[16];
+      sprintf(b, "_%d", k);
+      fname = ident(ms[i].name) + b;
+    }
+    used.insert(fname);
+    std::string params, args;
+    for (size_t a = 0; a < ms[i].args.size(); ++a) {
+      char b[64];
+      std::string pn = ms[i].names[a];
+      if (pn.empty() || pn == "self") {
+	sprintf(b, "a%d", (int)a);
+	pn = b;
+      }
+      params += ", " + pn + ": " + ms[i].args[a];
+      sprintf(b, "%srt::director_arg(a, %d)", a ? ", " : "", (int)a);
+      args += b;
+    }
+    decls += "    fn " + fname + "(&self" + params + ")" + (ms[i].ret == "()" ? "" : " -> " + ms[i].ret) + " {\n        rt::director_base()\n    }\n";
+    arms += "                \"" + ms[i].name + "\" => Box::new(imp." + fname + "(" + args + ")),\n";
+  }
+  Printf(f_rs_classes, "/// Overridable methods of %s; a method left out runs the C++ implementation\n", rname);
+  Printf(f_rs_classes, "#[allow(unused_variables)]\npub trait %s: Send + Sync + 'static {\n%s}\n\n", trait.c_str(), decls.c_str());
+  Printf(f_rs_classes, "impl %s {\n", rname);
+  Printf(f_rs_classes, "    /// A %s whose virtual methods are implemented by imp\n", rname);
+  Printf(f_rs_classes, "    pub fn from_impl(imp: impl %s) -> %s {\n", trait.c_str(), rname);
+  Printf(f_rs_classes, "        let f = rt::director_fn(Box::new(move |m: &str, a: &[rt::RVRef]| -> Box<dyn rt::ToRV> {\n");
+  Printf(f_rs_classes, "            let _ = a;\n            match m {\n%s                _ => rt::director_base(),\n            }\n        }));\n", arms.c_str());
+  Printf(f_rs_classes, "        rt::out1(rt::call_or_panic(ffi::swigrs_new_%s, vec![f], 1))\n    }\n}\n\n", class_name);
+}
+
 /* ------------------------------------------------------------
  * classHandler(): Rust proxy struct
  * ------------------------------------------------------------ */
@@ -1434,6 +1736,25 @@ int RUST::classHandler(Node *n) {
   Printf(f_rs_classes, "}\n\n");
 
   Printf(f_rs_classes, "%s", class_traits[n].c_str());
+  if (Swig_directorclass(n)) emitDirectorTrait(n, rname);
+  /* Upcasts: a copy as each copyable ancestor */
+  {
+    std::vector<Node *> q(1, n);
+    std::set<Node *> seen(q.begin(), q.end());
+    for (size_t i = 0; i < q.size(); ++i) {
+      List *bases = Getattr(q[i], "bases");
+      for (int b = 0; bases && b < Len(bases); ++b) {
+	Node *base = Getitem(bases, b);
+	if (!seen.insert(base).second) continue;
+	q.push_back(base);
+	if (class_traits[base].find("impl Clone for") == std::string::npos) continue;
+	String *bname = rustIdent(Getattr(base, "sym:name"));
+	Printf(f_rs_classes, "impl From<&%s> for %s {\n    fn from(x: &%s) -> %s {\n        rt::out1(rt::call_or_panic(ffi::swigrs_new_%s, vec![rt::ToRV::to_rv(x)], 1))\n    }\n}\n\n",
+	       rname, bname, rname, bname, Getattr(base, "sym:name"));
+	Delete(bname);
+      }
+    }
+  }
   /* Dicts keep moved values, or clones of referenced ones */
   Printf(f_rs_classes, "impl rt::DictValue for %s {\n    fn into_boxed(self) -> Box<dyn rt::ToRV> {\n        Box::new(self)\n    }\n}\n\n", rname);
   if (class_traits[n].find("impl Clone for") != std::string::npos)
@@ -1445,6 +1766,8 @@ int RUST::classHandler(Node *n) {
   Printf(f_rs_classes, "}\n\n");
   Printf(f_rs_classes, "impl rt::FromRV for %s {\n", rname);
   Printf(f_rs_classes, "    fn from_rv(v: rt::RVRef) -> Option<Self> {\n");
+  if (class_has_destructor)
+    object_deleters[Char(mangled)] = Char(class_name);
   if (class_has_destructor)
     Printf(f_rs_classes, "        rt::Handle::from_rv(v, Self::type_info(), Some(ffi::swigrs_delete_%s)).map(|h| %s { h })\n", class_name, rname);
   else

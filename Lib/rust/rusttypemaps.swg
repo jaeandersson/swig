@@ -20,3 +20,7 @@
 %include <typemaps/swigtypemaps.swg>
 
 %typecheck(SWIG_TYPECHECK_SWIGOBJECT) SWIG_Object "$1 = $input != 0;";
+
+/* Director constructors: the closure implementing the virtual methods */
+%typemap(in, noblock=1) SwigRV *self "$1 = $input;"
+%typemap(typecheck, precedence=SWIG_TYPECHECK_POINTER, noblock=1) SwigRV *self "$1 = $input && $input->kind == SWIG_RV_FUN;"

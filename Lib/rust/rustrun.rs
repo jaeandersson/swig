@@ -35,6 +35,8 @@ pub mod rt {
     pub const DICT: i32 = 4;
     pub const PTR: i32 = 5;
     pub const FUN: i32 = 6;
+    pub const BASE: i32 = 7;
+    pub const ERR: i32 = 8;
     pub const F64: i32 = 0;
     pub const I64: i32 = 1;
     pub const BOOL: i32 = 2;
@@ -50,6 +52,8 @@ pub mod rt {
         pub fn swig_rv_new_bool(rows: i64, cols: i64, data: *const u8) -> *mut SwigRV;
         pub fn swig_rv_new_sparse(rows: i64, cols: i64, colind: *const i64, row: *const i64, data: *const f64) -> *mut SwigRV;
         pub fn swig_rv_new_str(s: *const c_char, n: usize) -> *mut SwigRV;
+        pub fn swig_rv_new_base() -> *mut SwigRV;
+        pub fn swig_rv_new_err(s: *const c_char, n: usize) -> *mut SwigRV;
         pub fn swig_rv_new_list(n: usize) -> *mut SwigRV;
         pub fn swig_rv_list_set(l: *mut SwigRV, i: usize, item: *mut SwigRV);
         pub fn swig_rv_new_dict() -> *mut SwigRV;
@@ -113,8 +117,31 @@ pub mod rt {
     impl Drop for RV {
         fn drop(&mut self) {
             if !self.0.is_null() {
-                unsafe { swig_rv_free(self.0) }
+                unsafe {
+                    release_owned(self.0);
+                    swig_rv_free(self.0)
+                }
             }
+        }
+    }
+
+    /// Deletes objects a value still owns: nobody took them over
+    unsafe fn release_owned(v: *mut SwigRV) {
+        match swig_rv_kind(v) {
+            PTR if swig_rv_own(v) != 0 => {
+                let name = std::ffi::CStr::from_ptr(swig_rv_type_name(v)).to_string_lossy();
+                if let Some(del) = super::object_deleter(&name) {
+                    let p = swig_rv_ptr(v);
+                    swig_rv_disown(v);
+                    let _ = call(del, vec![RV::ptr(p, swig_rv_type(v), true)], 1);
+                }
+            }
+            LIST | DICT => {
+                for i in 0..swig_rv_len(v) {
+                    release_owned(swig_rv_item(v, i));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -470,8 +497,56 @@ pub mod rt {
         Str(String),
         List(Vec<Value>),
         Dict(BTreeMap<String, Value>),
-        /// Wrapped object, by type name
-        Object(String),
+        /// Wrapped object
+        Object(Object),
+    }
+
+    /// A wrapped object of any class, shared between clones
+    #[derive(Clone)]
+    pub struct Object(std::rc::Rc<Handle>);
+
+    impl Object {
+        fn from_rv(v: RVRef) -> Object {
+            unsafe {
+                let own = swig_rv_own(v.0) != 0;
+                swig_rv_disown(v.0);
+                let name = std::ffi::CStr::from_ptr(swig_rv_type_name(v.0)).to_string_lossy();
+                let del = super::object_deleter(&name);
+                Object(std::rc::Rc::new(Handle { ptr: swig_rv_ptr(v.0), ty: swig_rv_type(v.0), own, del }))
+            }
+        }
+        /// The SWIG type name, e.g. _p_casadi__Function
+        pub fn type_name(&self) -> String {
+            let rv = RV::ptr(self.0.ptr, self.0.ty, false);
+            unsafe { std::ffi::CStr::from_ptr(swig_rv_type_name(rv.0)).to_string_lossy().into_owned() }
+        }
+        /// A copy as class T, if the object is one
+        pub fn get<T: FromRV + Clone>(&self) -> Option<T> {
+            let rv = RV::ptr(self.0.ptr, self.0.ty, false);
+            T::from_rv(RVRef(rv.0)).map(|borrowed| borrowed.clone())
+        }
+    }
+
+    impl std::fmt::Debug for Object {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "Object({})", self.type_name())
+        }
+    }
+
+    impl PartialEq for Object {
+        fn eq(&self, other: &Object) -> bool {
+            self.0.ptr == other.0.ptr
+        }
+    }
+
+    impl Value {
+        /// A copy of a wrapped object as class T
+        pub fn as_object<T: FromRV + Clone>(&self) -> Option<T> {
+            match self {
+                Value::Object(o) => o.get(),
+                _ => None,
+            }
+        }
     }
 
     impl FromRV for Value {
@@ -517,7 +592,7 @@ pub mod rt {
                     STR => Value::Str(String::from_rv(v)?),
                     LIST => Value::List((0..v.len()).map(|i| Value::from_rv(v.item(i))).collect::<Option<_>>()?),
                     DICT => Value::Dict((0..v.len()).map(|i| Some((v.key(i), Value::from_rv(v.item(i))?))).collect::<Option<_>>()?),
-                    PTR => Value::Object(std::ffi::CStr::from_ptr(swig_rv_type_name(v.0)).to_string_lossy().into_owned()),
+                    PTR => Value::Object(Object::from_rv(v)),
                     _ => return None,
                 })
             }
@@ -584,7 +659,7 @@ pub mod rt {
                 Value::Int(i) => write!(f, "{}", i),
                 Value::Float(x) => write!(f, "{}", x),
                 Value::Str(s) => write!(f, "{}", s),
-                Value::Object(n) => write!(f, "<{}>", n),
+                Value::Object(o) => write!(f, "<{}>", o.type_name()),
                 Value::Matrix(r, c, d) => {
                     write!(f, "[")?;
                     for i in 0..*r {
@@ -627,7 +702,7 @@ pub mod rt {
                 Value::Str(s) => s.to_rv(),
                 Value::List(l) => RV::list(l.iter().map(|e| e.to_rv()).collect()),
                 Value::Dict(d) => RV::dict(d.iter().map(|(k, v)| (k.as_str(), v.to_rv()))),
-                Value::Object(n) => panic!("cannot pass a {} back by type name", n),
+                Value::Object(o) => RV::ptr(o.0.ptr, o.0.ty, false),
             }
         }
     }
@@ -873,6 +948,14 @@ pub mod rt {
         type K = kind::Dict;
     }
 
+    impl<S: AsRef<str>> HasKind for HashMap<S, Value> {
+        type K = kind::Dict;
+    }
+
+    impl<S: AsRef<str>> HasKind for BTreeMap<S, Value> {
+        type K = kind::Dict;
+    }
+
     /// The first output
     pub fn out1<T: FromRV>(o: Vec<RV>) -> T {
         take(o.into_iter().next().expect("missing output"))
@@ -951,7 +1034,10 @@ pub mod rt {
             f(resv.len() as c_int, resv.as_mut_ptr(), argv.len() as c_int, argv.as_mut_ptr())
         };
         for a in argv {
-            unsafe { swig_rv_free(a) };
+            unsafe {
+                release_owned(a);
+                swig_rv_free(a)
+            };
         }
         let out: Vec<RV> = resv.into_iter().filter(|p| !p.is_null()).map(RV).collect();
         if flag != 0 {
@@ -966,5 +1052,77 @@ pub mod rt {
             Ok(r) => r,
             Err(e) => panic!("{}", e),
         }
+    }
+
+    impl ToRV for () {
+        fn to_rv(&self) -> RV {
+            RV::nil()
+        }
+    }
+
+    /// Payload of director_base
+    pub struct Base;
+
+    /// Default body of director trait methods: the C++ implementation runs instead
+    pub fn director_base() -> ! {
+        std::panic::resume_unwind(Box::new(Base))
+    }
+
+    /// Argument i of a director upcall
+    pub fn director_arg<T: FromRV>(a: &[RVRef], i: usize) -> T {
+        match T::from_rv(a[i]) {
+            Some(x) => x,
+            None => panic!("director argument {}: cannot convert to {}", i, std::any::type_name::<T>()),
+        }
+    }
+
+    /// Dispatches an upcall by method name
+    pub type DirectorFn = dyn Fn(&str, &[RVRef]) -> Box<dyn ToRV> + Send + Sync;
+
+    thread_local! {
+        // Results of upcalls in progress on this thread, alive until C++ has converted them
+        static DIRECTOR_KEEP: std::cell::RefCell<Vec<Option<Box<dyn ToRV>>>> = std::cell::RefCell::new(Vec::new());
+    }
+
+    unsafe extern "C" fn director_invoke(ctx: *mut c_void, argc: c_int, argv: *mut *mut SwigRV) -> *mut SwigRV {
+        if argc == 0 {
+            DIRECTOR_KEEP.with(|k| k.borrow_mut().pop());
+            return std::ptr::null_mut();
+        }
+        let f = &*(ctx as *const Box<DirectorFn>);
+        let argv = std::slice::from_raw_parts(argv, argc as usize);
+        let method = String::from_rv(RVRef(argv[0])).unwrap_or_default();
+        let args: Vec<RVRef> = argv[1..].iter().map(|&p| RVRef(p)).collect();
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&method, &args))) {
+            Ok(r) => {
+                let rv = r.to_rv().into_raw();
+                DIRECTOR_KEEP.with(|k| k.borrow_mut().push(Some(r)));
+                rv
+            }
+            Err(p) => {
+                DIRECTOR_KEEP.with(|k| k.borrow_mut().push(None));
+                if p.is::<Base>() {
+                    return swig_rv_new_base();
+                }
+                let msg = if let Some(s) = p.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = p.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "panic".to_string()
+                };
+                let msg = format!("Rust {}() panicked: {}", method, msg);
+                swig_rv_new_err(msg.as_ptr() as *const c_char, msg.len())
+            }
+        }
+    }
+
+    unsafe extern "C" fn director_drop(ctx: *mut c_void) {
+        drop(Box::from_raw(ctx as *mut Box<DirectorFn>));
+    }
+
+    /// The closure a director object calls for its virtual methods
+    pub fn director_fn(f: Box<DirectorFn>) -> RV {
+        RV(unsafe { swig_rv_new_fun(Box::into_raw(Box::new(f)) as *mut c_void, director_invoke, director_drop) })
     }
 }
