@@ -88,6 +88,8 @@ private:
     bool inherit;
   };
   std::map<Node *, std::vector<Snippet> > class_snippets;
+  /* Trait impls of a class: Clone from the copy constructor, Default from the default one */
+  std::map<Node *, std::string> class_traits;
   std::map<std::string, std::string> acc_traits;
   int sig_count;
   std::set<std::string> global_names;
@@ -1174,7 +1176,8 @@ void RUST::emitTyped(Node *n, const std::string &ename, int num_returns) {
   std::string base = cur_name ? Char(cur_name) : "";
   bool member = cur_kind == CK_MEMBER;
   if (cur_kind == CK_CTOR) {
-    base = "new";
+    /* A renamed constructor is a named one, e.g. from_ccs */
+    base = Cmp(cur_name, class_name) == 0 ? "new" : Char(cur_name);
   } else if (cur_kind == CK_VAR) {
     std::string iname = Char(Getattr(n, "sym:name"));
     bool setter = iname.size() > 4 && iname.compare(iname.size() - 4, 4, "_set") == 0;
@@ -1182,8 +1185,33 @@ void RUST::emitTyped(Node *n, const std::string &ename, int num_returns) {
     member = !ovs.empty() && ovs[0].nin < (int)(Len(Getattr(n, "wrap:parms")) ? ParmList_len(Getattr(n, "wrap:parms")) : 0);
   }
 
+  /* Constructors: copy -> Clone, default -> Default */
+  if (cur_kind == CK_CTOR && class_node) {
+    std::string rcls = ident(Char(class_name));
+    std::vector<Overload> rest;
+    for (size_t i = 0; i < ovs.size(); ++i) {
+      ParmList *l = Getattr(ovs[i].n, "wrap:parms");
+      SwigType *b = ovs[i].nin == 1 && l ? bareType(Getattr(l, "type")) : 0;
+      bool copy = b && classLookup(b) == class_node;
+      Delete(b);
+      char nr[16];
+      sprintf(nr, "%d", num_returns);
+      if (copy) {
+	if (base == "new")
+	  class_traits[class_node] += "impl Clone for " + rcls + " {\n    fn clone(&self) -> Self {\n        rt::out1(rt::call_or_panic(ffi::" + ename + ", vec![rt::ToRV::to_rv(self)], " + nr + "))\n    }\n}\n\n";
+      } else if (ovs[i].req == 0 && base == "new") {
+	if (class_traits[class_node].find("impl Default") == std::string::npos)
+	  class_traits[class_node] += "impl Default for " + rcls + " {\n    fn default() -> Self {\n        rt::out1(rt::call_or_panic(ffi::" + ename + ", vec![], " + nr + "))\n    }\n}\n\n";
+      } else {
+	rest.push_back(ovs[i]);
+      }
+    }
+    ovs = rest;
+  }
+
   std::string code = skipped;
   if (!ovs.empty()) {
+    /* Plain: fewest arguments; _with: most arguments */
     int kmin = ovs[0].req, kmax = ovs[0].nin;
     for (size_t i = 1; i < ovs.size(); ++i) {
       kmin = std::min(kmin, ovs[i].req);
@@ -1284,6 +1312,7 @@ int RUST::classHandler(Node *n) {
   }
   Printf(f_rs_classes, "}\n\n");
 
+  Printf(f_rs_classes, "%s", class_traits[n].c_str());
   Printf(f_rs_classes, "impl rt::ToRV for %s {\n", rname);
   Printf(f_rs_classes, "    fn to_rv(&self) -> rt::RV {\n");
   Printf(f_rs_classes, "        self.h.to_rv()\n");
