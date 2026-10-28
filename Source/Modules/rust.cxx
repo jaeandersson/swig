@@ -45,6 +45,8 @@ public:
   virtual int functionWrapper(Node *n);
   virtual int variableWrapper(Node *n);
   virtual int constantWrapper(Node *n);
+  virtual int enumDeclaration(Node *n);
+  virtual int enumvalueDeclaration(Node *n);
   virtual int classHandler(Node *n);
   virtual int destructorHandler(Node *n);
   virtual int insertDirective(Node *n);
@@ -93,6 +95,9 @@ private:
   std::map<std::string, std::string> acc_traits;
   int sig_count;
   std::set<std::string> global_names;
+  /* Enum values known at generation time; enum_next < 0 once an initializer is not a literal */
+  std::map<std::string, long long> enum_values;
+  long long enum_next;
   std::set<std::string> joins;
   std::string fail_type;
 
@@ -654,6 +659,33 @@ int RUST::variableWrapper(Node *n) {
 }
 
 /* ------------------------------------------------------------
+ * Enums: track values so they become Rust constants
+ * ------------------------------------------------------------ */
+
+int RUST::enumDeclaration(Node *n) {
+  enum_next = 0;
+  return Language::enumDeclaration(n);
+}
+
+int RUST::enumvalueDeclaration(Node *n) {
+  String *ev = Getattr(n, "enumvalue");
+  if (ev) {
+    char *end;
+    long long v = strtoll(Char(ev), &end, 0);
+    std::map<std::string, long long>::iterator it = enum_values.find(Char(ev));
+    if (*end == 0 && end != Char(ev)) enum_next = v;
+    else if (it != enum_values.end()) enum_next = it->second;
+    else enum_next = -1;
+  }
+  if (enum_next >= 0) {
+    enum_values[Char(Getattr(n, "sym:name"))] = enum_next;
+    enum_values[Char(Getattr(n, "name"))] = enum_next;
+    enum_next++;
+  }
+  return Language::enumvalueDeclaration(n);
+}
+
+/* ------------------------------------------------------------
  * constantWrapper(): one getter function per constant
  * ------------------------------------------------------------ */
 
@@ -689,6 +721,18 @@ int RUST::constantWrapper(Node *n) {
     Printf(f_wrappers, "  return 0;\n");
     Printf(f_wrappers, "}\n");
     addEntry(cname, wname, 1, 0);
+    /* Typed: a const when the value is known here, else a getter */
+    std::string rs = ident(Char(symname));
+    std::map<std::string, long long>::iterator ev = enum_values.find(Char(symname));
+    std::string out = rsOut(type);
+    if (!global_names.count(rs)) {
+      global_names.insert(rs);
+      if (ev != enum_values.end()) {
+	Printf(f_rs_globals, "\npub const %s: i64 = %lld;\n", rs.c_str(), ev->second);
+      } else if (!out.empty()) {
+	Printf(f_rs_globals, "\npub fn %s() -> %s {\n    rt::out1(rt::call_or_panic(ffi::swigrs_%s, vec![], 1))\n}\n", rs.c_str(), out.c_str(), Char(cname));
+      }
+    }
     Delete(wname);
     Delete(cname);
   } else {
@@ -1080,6 +1124,13 @@ std::string RUST::emitForm(const std::string &rname, int k, const std::vector<Ov
       std::string ptrait = sig + pi;
       Printf(f_rs_sigs, "    pub trait %s {\n        type M;\n    }\n", ptrait.c_str());
       for (std::map<std::string, unsigned long long>::iterator it = km.begin(); it != km.end(); ++it) {
+	/* An untyped dict dispatches on its contents at run time: no static output if candidates differ */
+	if (it->first == "kind::Dict") {
+	  std::set<std::string> outs;
+	  for (size_t c = 0; c < cands.size() && c < 64; ++c)
+	    if (it->second & (1ULL << c)) outs.insert(outType(cands[c]->outs));
+	  if (outs.size() > 1) continue;
+	}
 	Printf(f_rs_sigs, "    impl %s for %s {\n        type M = rt::Mask<%llu>;\n    }\n", ptrait.c_str(), it->first.c_str(), it->second);
 	masks.insert(it->second);
       }
@@ -1182,6 +1233,14 @@ std::string RUST::emitGroup(std::vector<Overload> &ovs, const std::string &base,
 	Delete(decl);
     }
   }
+  if (getenv("RUST_UNREACHABLE"))
+    for (size_t i = 0; i < ovs.size(); ++i)
+      for (int k = ovs[i].req; k <= ovs[i].nin; ++k)
+	if (!forms.count(k)) {
+	  String *decl = Swig_name_decl(ovs[i].n);
+	  Printf(stderr, "UNREACHABLE %s %d %s %s\n", base.c_str(), k, ovs[i].nin == forms.rbegin()->first ? "PREFIX" : "OTHER", decl);
+	  Delete(decl);
+	}
   for (std::map<int, std::string>::iterator f = forms.begin(); f != forms.end(); ++f) {
     std::vector<Overload *> cands;
     for (size_t i = 0; i < ovs.size(); ++i)

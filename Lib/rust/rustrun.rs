@@ -501,6 +501,98 @@ pub mod rt {
         }
     }
 
+    impl Value {
+        pub fn as_str(&self) -> Option<&str> {
+            match self {
+                Value::Str(s) => Some(s),
+                _ => None,
+            }
+        }
+        pub fn as_bool(&self) -> Option<bool> {
+            match self {
+                Value::Bool(b) => Some(*b),
+                Value::Int(i) => Some(*i != 0),
+                _ => None,
+            }
+        }
+        pub fn as_i64(&self) -> Option<i64> {
+            match self {
+                Value::Int(i) => Some(*i),
+                Value::Bool(b) => Some(*b as i64),
+                Value::Float(x) if x.fract() == 0.0 => Some(*x as i64),
+                _ => None,
+            }
+        }
+        pub fn as_f64(&self) -> Option<f64> {
+            match self {
+                Value::Float(x) => Some(*x),
+                Value::Int(i) => Some(*i as f64),
+                Value::Bool(b) => Some(*b as i64 as f64),
+                Value::Matrix(1, 1, d) => Some(d[0]),
+                _ => None,
+            }
+        }
+        pub fn as_list(&self) -> Option<&[Value]> {
+            match self {
+                Value::List(l) => Some(l),
+                _ => None,
+            }
+        }
+        pub fn as_dict(&self) -> Option<&BTreeMap<String, Value>> {
+            match self {
+                Value::Dict(d) => Some(d),
+                _ => None,
+            }
+        }
+        fn fmt_nested(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Value::Str(s) => write!(f, "{:?}", s),
+                v => write!(f, "{}", v),
+            }
+        }
+    }
+
+    /// Strings print bare at the top level and quoted inside lists and dicts
+    impl std::fmt::Display for Value {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Value::None => write!(f, "None"),
+                Value::Bool(b) => write!(f, "{}", b),
+                Value::Int(i) => write!(f, "{}", i),
+                Value::Float(x) => write!(f, "{}", x),
+                Value::Str(s) => write!(f, "{}", s),
+                Value::Object(n) => write!(f, "<{}>", n),
+                Value::Matrix(r, c, d) => {
+                    write!(f, "[")?;
+                    for i in 0..*r {
+                        write!(f, "{}[", if i > 0 { ", " } else { "" })?;
+                        for j in 0..*c {
+                            write!(f, "{}{}", if j > 0 { ", " } else { "" }, d[i + j * r])?;
+                        }
+                        write!(f, "]")?;
+                    }
+                    write!(f, "]")
+                }
+                Value::List(l) => {
+                    write!(f, "[")?;
+                    for (i, e) in l.iter().enumerate() {
+                        write!(f, "{}", if i > 0 { ", " } else { "" })?;
+                        e.fmt_nested(f)?;
+                    }
+                    write!(f, "]")
+                }
+                Value::Dict(d) => {
+                    write!(f, "{{")?;
+                    for (i, (k, e)) in d.iter().enumerate() {
+                        write!(f, "{}{:?}: ", if i > 0 { ", " } else { "" }, k)?;
+                        e.fmt_nested(f)?;
+                    }
+                    write!(f, "}}")
+                }
+            }
+        }
+    }
+
     impl ToRV for Value {
         fn to_rv(&self) -> RV {
             match self {
@@ -550,7 +642,7 @@ pub mod rt {
             }
         )*};
     }
-    has_kind!(F64: f64, f32);
+    has_kind!(F64: f64);
     has_kind!(I64: i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
     has_kind!(Bool: bool);
     has_kind!(Str: str, String);
@@ -579,11 +671,6 @@ pub mod rt {
         type K = kind::Pair<A::K, B::K>;
     }
 
-    impl ToRV for f32 {
-        fn to_rv(&self) -> RV {
-            (*self as f64).to_rv()
-        }
-    }
 
     impl<A: ToRV, B: ToRV> ToRV for (A, B) {
         fn to_rv(&self) -> RV {
