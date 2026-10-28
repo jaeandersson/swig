@@ -1124,8 +1124,17 @@ std::string RUST::emitForm(const std::string &rname, int k, const std::vector<Ov
       where += ", " + acc + ": rt::Join<" + folds[f] + ">";
       acc = "<" + acc + " as rt::Join<" + folds[f] + ">>::Out";
     }
-    where += ", " + acc + ": sigs::" + ptrait;
-    out = "<" + acc + " as sigs::" + ptrait + ">::Out";
+    /* A common output type is spelled out, so callers need no inference through the masks */
+    std::string common = outType(cands[0]->outs);
+    for (size_t c = 1; c < cands.size() && c < 64; ++c)
+      if (outType(cands[c]->outs) != common) common.clear();
+    if (common.empty()) {
+      where += ", " + acc + ": sigs::" + ptrait;
+      out = "<" + acc + " as sigs::" + ptrait + ">::Out";
+    } else {
+      where += ", " + acc + ": sigs::" + ptrait + "<Out = " + common + ">";
+      out = common;
+    }
     take = "<" + acc + " as sigs::" + ptrait + ">::take(o)";
   } else {
     out = outType(cands[0]->outs);
