@@ -80,6 +80,7 @@ eswig_SOURCES =	CParse/cscanner.c		\
 		Modules/embind.cxx		\
 		Modules/wasm_js.cxx		\
 		Modules/julia.cxx		\
+		Modules/rust.cxx		\
 		Preprocessor/cpp.c		\
 		Preprocessor/expr.c		\
 		Swig/cwrap.c			\
