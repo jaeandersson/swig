@@ -7,8 +7,8 @@
  * only a cell holding the pointer, so it does not keep the proxy alive; giving
  * up ownership empties the cell.  delete() and close() (AutoCloseable) run the
  * action at most once.  Cleaning actions are skipped once the JVM shuts down.
- * The cleaner thread only queues deletes; they run on the next application thread
- * that creates a proxy, so destructors never run concurrently with native calls.
+ * The cleaner thread only queues deletes; they run, one thread at a time, on the next
+ * application thread that creates a proxy, never concurrently with each other.
  *
  * Usage: %include <javacleaner.swg> before the wrapped classes.
  * ----------------------------------------------------------------------------- */
@@ -27,8 +27,15 @@
   static {
     Runtime.getRuntime().addShutdownHook(new Thread(() -> swigShutdown = true));
   }
+  private final static java.util.concurrent.locks.ReentrantLock SWIG_DRAIN_LOCK = new java.util.concurrent.locks.ReentrantLock();
+  /* One thread at a time runs the queued deletes; others carry on */
   static void swigDrain() {
-    for (Runnable r; (r = SWIG_PENDING.poll()) != null;) r.run();
+    if (SWIG_PENDING.isEmpty() || !SWIG_DRAIN_LOCK.tryLock()) return;
+    try {
+      for (Runnable r; (r = SWIG_PENDING.poll()) != null;) r.run();
+    } finally {
+      SWIG_DRAIN_LOCK.unlock();
+    }
   }
   /* Registers a cleaning action for obj; cell[0] holds the pointer to delete, 0 for none */
   static java.lang.ref.Cleaner.Cleanable swigRegister(Object obj, long[] cell, java.util.function.LongConsumer delete) {

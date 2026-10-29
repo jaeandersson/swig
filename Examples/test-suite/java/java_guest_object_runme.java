@@ -92,5 +92,18 @@ public class java_guest_object_runme {
     }
     check(java_guest_object.tracked_alive_count() <= 500, "unreachable proxies deleted: " + java_guest_object.tracked_alive_count() + " alive");
     check(java_guest_object.tracked_deleted_off_thread() == 0, "no destructor on the cleaner thread: " + java_guest_object.tracked_deleted_off_thread());
+
+    // Many threads creating proxies drain the queue one at a time
+    java_guest_object.tracked_any_thread();
+    for (int i = 0; i < 2000; ++i) new Tracked();
+    System.gc();
+    try { Thread.sleep(200); } catch (InterruptedException e) {}
+    Thread[] ws = new Thread[8];
+    for (int t = 0; t < ws.length; ++t) {
+      ws[t] = new Thread(() -> { for (int k = 0; k < 200; ++k) java_guest_object.twice(new Vec(k)); });
+      ws[t].start();
+    }
+    for (Thread w : ws) { try { w.join(); } catch (InterruptedException e) {} }
+    check(java_guest_object.tracked_overlapping_deletes() == 0, "queued deletes never overlap: " + java_guest_object.tracked_overlapping_deletes());
   }
 }
