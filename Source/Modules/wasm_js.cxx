@@ -18,6 +18,7 @@
  * ----------------------------------------------------------------------------- */
 
 #include "swigmod.h"
+#include "cparse.h"
 #include <ctype.h>  /* isalnum (cpp_to_ts: drop X:: qualified prefixes) */
 
 static const char *usage = "\
@@ -294,8 +295,8 @@ protected:
                                        at registration time; used at
                                        end-of-top() to emit
                                        `swig_can_<Class>` probe wrappers
-                                       that delegate to
-                                       casadi::can_convert<cpp_type>(p). */
+                                       that run the typecheck of
+                                       cpp_type (probe_check_code). */
   Hash   *classes_needing_probes;  /* JS class names referenced from any
                                        dispatcher.  Drives probe-wrapper
                                        emission at top()-end so we only
@@ -309,10 +310,9 @@ protected:
                                        that DON'T have a registered JS class
                                        (dicts, pairs, raw vectors); we emit
                                        a wasm-side `swig_can_<mangled>(EM_VAL)`
-                                       wrapper that delegates to
-                                       `casadi::can_convert<T>(p)`, mirroring
-                                       SWIG's canonical typecheck typemap
-                                       (precedence + probe-mode to_ptr).
+                                       wrapper running the typecheck of T
+                                       (probe_check_code), as SWIG's
+                                       overload dispatch would.
                                        Without this the dispatcher falls
                                        back to "no probe -> always true",
                                        and first-source-order overload
@@ -381,10 +381,9 @@ protected:
   }
 
   /* Emit one `EMSCRIPTEN_KEEPALIVE int swig_can_<Class>(EM_VAL p)`
-     wrapper per registered probe.  Each delegates to
-     `casadi::can_convert<cpp_type>(p)` which calls `to_ptr(p, T**=0)`
-     (no actual conversion).  The dispatcher uses these in place of the
-     JS-side `__can(arg, "<Class>")` string-compare predicate, so dispatch
+     wrapper per registered probe.  Each runs the typecheck of the class
+     type (probe_check_code; no actual conversion).  The dispatcher uses
+     these in place of the JS-side `__can(arg, "<Class>")` string-compare predicate, so dispatch
      goes through the same fuzzy-coercion path as matlab/python. */
   /* Single-place type-check emission, shared by the three dispatcher
      sites (global free fn / static member / non-static member).  Returns
@@ -473,7 +472,7 @@ protected:
      proxy (typically std::map / std::pair / unwrapped std::vector).
      Driven from the dispatcher emission sites: when an overload has a
      parm whose type can't be discriminated via _swig_can_<Class>, fall
-     back to a `casadi::can_convert<T>(p)` probe.  Returns the JS-side
+     back to a typecheck probe of T.  Returns the JS-side
      probe expression to embed in `type_checks` (or empty string if the
      type can't be probed).  The actual probe wrapper is emitted by
      emit_typecheck_probe_wrappers() at end-of-top. */
@@ -487,13 +486,12 @@ protected:
     /* SwigType_ltype rewrites references as pointers (C has no `&`).
        For typecheck-probe purposes we want the VALUE type, so peel
        any leading pointer too.  Otherwise the probe ends up
-       instantiating can_convert<std::map<...>*> instead of
-       can_convert<std::map<...>>, which never compiles or always
-       returns false. */
+       checking std::map<...>* instead of std::map<...>, which never
+       compiles or always returns false. */
     if (SwigType_isreference(bare)) SwigType_del_reference(bare);
     if (SwigType_ispointer(bare))   SwigType_del_pointer(bare);
-    /* Resolve typedefs so casadi::SXDict -> std::map<std::string,
-       Matrix<SXElem>>, etc.  Without this the strstr below misses
+    /* Resolve typedefs so a `typedef std::map<std::string, T> TDict`
+       is seen as the map.  Without this the strstr below misses
        typedef'd container types and the dispatcher reverts to the
        broken first-overload-wins behavior. */
     SwigType *resolved = SwigType_typedef_resolve_all(bare);
@@ -532,10 +530,35 @@ protected:
     return expr;
   }
 
+  /* Statements setting `_ok` to whether `p` converts to C++ type
+     `cpp_t`: the module's typecheck typemap for `const T&` (else `T`),
+     with $1 -> _ok and $input -> p, else `fallback`. */
+  String *probe_check_code(const String *cpp_t, const char *fallback) {
+    SwigType *t = Swig_cparse_type(NewString(cpp_t));
+    String *code = 0;
+    if (t) {
+      SwigType *cr = Copy(t);
+      SwigType_add_qualifier(cr, "const");
+      SwigType_add_reference(cr);
+      SwigType *tries[2] = { cr, t };
+      for (int i = 0; i < 2 && !code; ++i) {
+        Parm *p = NewParmWithoutFileLineInfo(tries[i], "p");
+        String *tm = Swig_typemap_lookup("typecheck", p, "_ok", 0);
+        if (tm) {
+          code = Copy(tm);
+          Replaceall(code, "$input", "p");
+        }
+        Delete(p);
+      }
+      Delete(cr);
+      Delete(t);
+    }
+    if (!code) code = NewStringf(fallback, cpp_t);
+    return code;
+  }
+
   /* Emit `EMSCRIPTEN_KEEPALIVE int swig_can_<mangled>(EM_VAL p)` per
-     registered typecheck-probe.  Each delegates to
-     `casadi::can_convert<T>(p)` which calls the per-T `to_ptr(p, T**=0)`
-     probe -- identical to SWIG's standard typecheck typemap body. */
+     registered typecheck-probe; the body is probe_check_code(T). */
   void emit_typecheck_probe_wrappers() {
     if (!types_needing_typecheck_probes) return;
     Printf(f_cpp_wrappers,
@@ -546,13 +569,17 @@ protected:
       String *probe_id = (String *)it.key;
       String *cpp_t    = (String *)it.item;
       String *swig_name = NewStringf("swig_can_%s", Char(probe_id));
+      /* Containers: the std container traits */
+      String *check = probe_check_code(cpp_t, "_ok = swig::check< %s >(p);");
       Printf(f_cpp_wrappers,
         "EMSCRIPTEN_KEEPALIVE int %s(EM_VAL p) {\n"
         "  if (!p) return 0;\n"
-        "  typedef %s _T;\n"
-        "  return casadi::can_convert<_T>(p) ? 1 : 0;\n"
+        "  int _ok = 0;\n"
+        "  { %s }\n"
+        "  return _ok ? 1 : 0;\n"
         "}\n",
-        Char(swig_name), Char(cpp_t));
+        Char(swig_name), check);
+      Delete(check);
       register_export(Char(swig_name));
       Delete(swig_name);
       it = Next(it);
@@ -565,7 +592,7 @@ protected:
                            "wasm-side dispatch helpers.  Each probe does\n"
                            "   strict tag-string match against the JS\n"
                            "   proxy's `_swig_type` prototype property,\n"
-                           "   then falls back to can_convert<T> for\n"
+                           "   then falls back to the typecheck of T for\n"
                            "   fuzzy-coercion paths (array/Dict/scalar).\n"
                            "\n"
                            "   Tag-string match (rather than SWIG_ConvertPtr\n"
@@ -588,6 +615,8 @@ protected:
         SwigType *t_ptr = Copy(t);
         SwigType_add_pointer(t_ptr);
         String *swig_tag = SwigType_manglestr(t_ptr);  /* "_p_..." */
+        /* Classes: any wrapped object (the tag match above was the exact test) */
+        String *check = probe_check_code(cpp_t, "void *_vp = 0; _ok = SWIG_IsOK(SWIG_ConvertPtr(p, &_vp, 0, 0));");
         Printf(f_cpp_wrappers,
           "EMSCRIPTEN_KEEPALIVE int %s(EM_VAL p) {\n"
           "  if (!p) return 0;\n"
@@ -597,7 +626,7 @@ protected:
           "     `arg.constructor.name === ClassName` semantics and keeps\n"
           "     integer-arg overloads (e.g. MX(rows, cols)) from being\n"
           "     preempted by class probes that would fuzzy-accept scalars\n"
-          "     via to_ptr<T>'s scalar coercion path. */\n"
+          "     via the typecheck's scalar coercion path. */\n"
           "  if (_ty == \"string\" || _ty == \"number\" || _ty == \"bigint\"\n"
           "      || _ty == \"boolean\") {\n"
           "    _v.release_ownership();\n"
@@ -614,10 +643,12 @@ protected:
           "    return _match ? 1 : 0;\n"
           "  }\n"
           "  _v.release_ownership();\n"
-          "  typedef %s _T;\n"
-          "  return casadi::can_convert<_T>(p) ? 1 : 0;\n"
+          "  int _ok = 0;\n"
+          "  { %s }\n"
+          "  return _ok ? 1 : 0;\n"
           "}\n",
-          swig_name, swig_tag, cpp_t);
+          swig_name, swig_tag, check);
+        Delete(check);
         register_export(Char(swig_name));
         Delete(swig_name);
         Delete(swig_tag);

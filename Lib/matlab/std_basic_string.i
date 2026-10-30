@@ -12,18 +12,15 @@
 SWIGINTERN int
 SWIG_AsPtr(std::basic_string<char>)(mxArray* obj, std::string **val)
 {
-  if (mxIsChar(obj) {
-    if (val)
-      {
-	char * str = mxArrayToString(obj);
-	*val = new std::string(str);
-	mxFree(str);
-      }
+  char* buf = 0;
+  size_t size = 0;
+  int alloc = SWIG_OLDOBJ;
+  if (SWIG_IsOK((SWIG_AsCharPtrAndSize(obj, &buf, &size, &alloc))) && buf) {
+    if (val) *val = new std::string(buf, size - 1);
+    if (alloc == SWIG_NEWOBJ) %delete_array(buf);
     return SWIG_NEWOBJ;
   }
-  if (val)
-    SWIG_Error(SWIG_RuntimeError,"a string is expected");
-  return 0;
+  return SWIG_ERROR;
 }
 }
 

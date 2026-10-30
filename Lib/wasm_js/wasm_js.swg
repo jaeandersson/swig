@@ -92,9 +92,8 @@ _argouts[_argout_idx++] = (void*)(X);
 // `grep` and conveys intent at the .i level.
 #define %jscode  %insert("js")
 
-// Pull in fragment-name machinery and primitive AsVal/From stubs so that
-// casadi.i's `%fragment("casadi_bool", "header", fragment=SWIG_AsVal_frag(bool))`
-// etc. find what they expect.
+// Fragment-name machinery and the primitive SWIG_AsVal / SWIG_From
+// fragments (the swig::traits of std_common.i build on them).
 %include <wasm_jsprimtypes.swg>
 
 // ============================================================================
@@ -173,7 +172,7 @@ _argouts[_argout_idx++] = (void*)(X);
 %typemap(jsout) bool "(!!($call))"
 
 // ============================================================================
-// long long / unsigned long long (and typedefs like casadi_int) — wrap
+// long long / unsigned long long (and their typedefs) — wrap
 // the JS arg with BigInt() at the wasm-call boundary so users can pass
 // plain `Number` literals for matrix dimensions, indices, etc.  Without
 // this, embind throws "Cannot convert ... to BigInt" when a Number is
@@ -199,8 +198,8 @@ _argouts[_argout_idx++] = (void*)(X);
 //   - OUTPUT: jsout drains the wasm-returned XVector into a JS array
 //             via __vec_to_arr (helper emitted in f_js_pre).
 //
-// Invoked from casadi.i right after each `%template(NameVector)
-// std::vector<T>;` so the JS class name is statically available.
+// Invoke right after each `%template(NameVector) std::vector<T>;` so the
+// JS class name is statically available.
 %define %wasm_vec(T, NAME)
 %typemap(jsin) std::vector<T>, const std::vector<T>&, std::vector<T>& %{
       let __vp$argnum = $input;
@@ -215,36 +214,21 @@ _argouts[_argout_idx++] = (void*)(X);
 %typemap(jsfree) std::vector<T>, const std::vector<T>&, std::vector<T>& %{
       if (__vown$argnum && __vp$argnum.delete) __vp$argnum.delete();
 %}
-// Vector returns: with the wasmjs_vector_descriptor<T> trait
-// specialization emitted below, from_ptr<std::vector<T>> in casadi.i
-// passes the per-T swig_type_info* to SWIG_NewPointerObj, which then
-// routes through type->clientdata + M.__wrap_NAME(ptr) to produce a
-// fully-wrapped NAME proxy directly.  __from_handle just unboxes it,
-// __vec_to_arr drains it -- no JS-side rewrap required.
+// Vector returns: swig::from<std::vector<T> > wraps a copy as a NAME proxy
+// (wasm_js_class_name below); __vec_to_arr drains it into a JS array.
 %typemap(jsout) std::vector<T>, const std::vector<T>&, std::vector<T>&
 "__vec_to_arr(__from_handle($call))"
 
-// Per-T trait specialization: store the JS class name as a static
-// string.  from_ptr<std::vector<T>> reads it and routes through
-// SWIG_WASMJS_WrapByName(ptr, name) -> M.__wrap_<NAME>(ptr).
-// (#NAME here is the SWIG preprocessor stringification of the macro
-// arg NAME -- e.g. %wasm_vec(casadi::MX, MXVector) emits "MXVector".)
+// Register NAME as the JS class of std::vector<T> for the vector traits.
+%fragment("WasmJSClassName");
 %insert("header") %{
-namespace casadi {
-  template<> struct wasmjs_vector_jsname< T > {
+namespace swig {
+  template<> struct wasm_js_class_name< std::vector< T > > {
     static const char* get() { return #NAME; }
   };
 }
 %}
 %enddef
-
-
-// (Note: the previous `%wasm_vector(T)` macro -- an opaque-builder
-// convention for vector types -- has been removed.  Vector marshaling
-// now goes through casadi.i's `to_ptr<std::vector<M>**>` / `from_ptr`
-// templates (which delegate to SWIG_ConvertPtr / SWIG_NewPointerObj),
-// plus `%wasm_vec(T, NAME)` above for the JS-side Array <-> XVector
-// autoconversion typemaps.)
 
 
 // ============================================================================
@@ -291,24 +275,6 @@ namespace casadi {
     }
   }
 %}
-// SWIG normally typedef-resolves before matching, so the long-long
-// patterns above should already pick up casadi_int (= long long).
-// Register explicitly anyway: makes intent obvious and immunises us
-// against config builds that redefine CASADI_INT_TYPE.
-%typemap(directorin) casadi_int %{
-  $input = emscripten::val(static_cast<double>($1)).release_ownership();
-%}
-%typemap(directorout) casadi_int %{
-  {
-    emscripten::val __v = emscripten::val::take_ownership($input);
-    if (__v.typeOf().as<std::string>() == "bigint") {
-      $result = static_cast<casadi_int>(__v.as<long long>());
-    } else {
-      $result = static_cast<casadi_int>(__v.as<double>());
-    }
-  }
-%}
-
 %typemap(directorin) std::string, const std::string& %{
   $input = emscripten::val(std::string($1)).release_ownership();
 %}

@@ -23,12 +23,12 @@
 
 /* val.h declares EM_VAL (and the underlying `struct _EM_VAL`) inside
    namespace emscripten.  Bring both into global scope so the rest of
-   the generated wrapper -- including casadi.i's
-   `#define GUESTOBJECT casadi_emval_struct` substitution -- sees them
-   as unqualified identifiers, mirroring the way matlab.cxx wrappers
-   refer to plain `mxArray` / `mxArray*`. */
+   the generated wrapper -- and interface code that names the object
+   type, as in `SWIG_WASMJS_Object *p` -- sees them as unqualified
+   identifiers, mirroring the way matlab.cxx wrappers refer to plain
+   `mxArray` / `mxArray*`. */
 using emscripten::EM_VAL;
-typedef ::emscripten::_EM_VAL casadi_emval_struct;
+typedef ::emscripten::_EM_VAL SWIG_WASMJS_Object;
 
 /* Thread-local-ish error slot.  wasm-js is single-threaded today, so
    plain statics suffice.  Every generated wrapper emits a `fail:` label
@@ -86,6 +86,18 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* swig_last_error_msg(void) {
 #ifndef SWIGINTERNINLINE
 #define SWIGINTERNINLINE static inline
 #endif
+
+/* A val viewing a handle owned by the caller (the handle stays valid afterwards) */
+SWIGRUNTIMEINLINE emscripten::val SWIG_WASMJS_Borrow(EM_VAL h) {
+  emscripten::internal::_emval_incref(h);
+  return emscripten::val::take_ownership(h);
+}
+
+/* A wrapped object: a non-null JS object or callable carrying its own `_ptr` */
+SWIGRUNTIMEINLINE bool SWIG_WASMJS_IsWrapped(const emscripten::val& v) {
+  std::string ty = v.typeOf().as<std::string>();
+  return (ty == "object" || ty == "function") && !v.isNull() && v.hasOwnProperty("_ptr");
+}
 
 /* Phase 3.2: cast-chain + types-array init lives in the wrappers block,
    wired up eagerly via a static-constructor object emitted by
