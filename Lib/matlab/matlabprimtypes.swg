@@ -199,8 +199,14 @@ SWIG_AsCharPtrAndSize(mxArray* pm, char** cptr, size_t* psize, int *alloc)
   if (!mxIsChar(pm) || mxGetNumberOfDimensions(pm) != 2
       || (mxGetNumberOfElements(pm) != 0 && mxGetM(pm) != 1)) return SWIG_TypeError;
   if (!cptr && !psize) return SWIG_OK;
-  str = mxArrayToString(pm);
-  if (!str) return SWIG_TypeError;
+  /* mxGetString into a buffer large enough for UTF-8: mxArrayToString needs mxFree */
+  len = 4 * mxGetNumberOfElements(pm) + 1;
+  str = (char*)malloc(len);
+  if (!str) return SWIG_MemoryError;
+  if (mxGetString(pm, str, len)) {
+    free(str);
+    return SWIG_TypeError;
+  }
   len = strlen(str);
   if (alloc) {
     if (cptr) *cptr = %new_copy_array(str, len + 1, char);
@@ -210,7 +216,7 @@ SWIG_AsCharPtrAndSize(mxArray* pm, char** cptr, size_t* psize, int *alloc)
     if (bufsize < len + 1) {
       char *nbuf = (char*)realloc(buf, len + 1);
       if (!nbuf) {
-        mxFree(str);
+        free(str);
         return SWIG_MemoryError;
       }
       buf = nbuf;
@@ -220,7 +226,7 @@ SWIG_AsCharPtrAndSize(mxArray* pm, char** cptr, size_t* psize, int *alloc)
     *cptr = buf;
   }
   if (psize) *psize = len + 1;
-  mxFree(str);
+  free(str);
   return SWIG_OK;
 }
 }

@@ -651,11 +651,11 @@ namespace swig {
     static size_t size(mxArray* obj) { return mxGetNumberOfElements(obj); }
     template <class Seq>
     static bool append(mxArray* obj, size_t i, Seq* seq) {
-      if (seq) seq->insert(seq->end(), mxGetLogicals(obj)[i] != 0);
+      if (seq) seq->insert(seq->end(), static_cast<mxLogical*>(mxGetData(obj))[i] != 0);
       return true;
     }
     static mxArray* create(size_t n) { return mxCreateLogicalMatrix(1, n); }
-    static void set(mxArray* obj, size_t i, const bool& v) { mxGetLogicals(obj)[i] = v; }
+    static void set(mxArray* obj, size_t i, const bool& v) { static_cast<mxLogical*>(mxGetData(obj))[i] = v; }
   };
 
   // std::string: string arrays (via cellstr) and char matrices, one string per
