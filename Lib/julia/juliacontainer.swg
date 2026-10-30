@@ -109,6 +109,24 @@ namespace swig {
     }
   };
 
+  // Julia type a returned T has: native arrays, else the proxy registered under its type name, else Any
+  template <class T>
+  struct julia_eltype {
+    static jl_value_t* get() {
+      jl_value_t* e = julia_array_traits<T>::eltype();
+      if (e) return e;
+      std::string n = swig::type_name<T>();
+      std::string::size_type c = n.rfind("::");
+      if (c != std::string::npos) n = n.substr(c + 2);
+      std::map<std::string, jl_value_t*>::iterator it = swig_jl_proxy_types().find(n);
+      return it == swig_jl_proxy_types().end() ? (jl_value_t*)jl_any_type : it->second;
+    }
+  };
+  template <class T, class A>
+  struct julia_eltype<std::vector<T, A> > {
+    static jl_value_t* get() { return jl_apply_array_type(julia_eltype<T>::get(), 1); }
+  };
+
   // Append a converted element; false on failure
   template <class T>
   struct julia_seq_append {
@@ -213,6 +231,11 @@ namespace swig {
         }
       } catch (...) {
         ok = false;
+      }
+      if (ok && !et) {
+        // Vector{Any} narrowed to the element type when every element has it
+        jl_value_t* nt = julia_eltype<value_type>::get();
+        if (nt != (jl_value_t*)jl_any_type) r = swig_jl_narrow(r, nt);
       }
       JL_GC_POP();
       return ok ? r : 0;

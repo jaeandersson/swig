@@ -3,7 +3,7 @@
 %include <std_common.i>
 %include <juliacontainer.swg>
 
-%fragment("StdMapTraits","header",fragment="StdTraits",fragment="SwigJlRuntime")
+%fragment("StdMapTraits","header",fragment="StdTraits",fragment="SwigJlRuntime",fragment="JuliaArrayTraits")
 %{
   namespace swig {
     template <class K, class T, class C, class A>
@@ -99,8 +99,20 @@
         } catch (...) {
           ok = false;
         }
+        if (ok) {
+          // Dict{Any,Any} narrowed to the key and value types when every entry has them
+          k = jl_call2(jl_get_function(jl_base_module, "convert"), julia_eltype<map_type>::get(), d);
+          if (k) d = k; else jl_exception_clear();
+        }
         JL_GC_POP();
         return ok ? d : 0;
+      }
+    };
+
+    template <class K, class T, class C, class A>
+    struct julia_eltype<std::map<K, T, C, A> > {
+      static jl_value_t* get() {
+        return jl_apply_type2(jl_get_global(jl_base_module, jl_symbol("Dict")), julia_eltype<K>::get(), julia_eltype<T>::get());
       }
     };
   }
