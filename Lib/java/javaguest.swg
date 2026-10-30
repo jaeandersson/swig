@@ -13,6 +13,9 @@
 
 %pragma(java) guestobjects="1"
 
+/* stl.i picks the guest-object STL (javagueststl.i) */
+%define SWIG_JAVA_GUEST_OBJECTS %enddef
+
 /* Unchecked conversion of guest values for javaout / javadirectorin typemaps */
 %pragma(java) jniclasscode=%{
   @SuppressWarnings("unchecked")

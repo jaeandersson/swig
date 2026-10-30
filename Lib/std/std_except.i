@@ -1,4 +1,4 @@
-#if defined(SWIGJAVA) || defined(SWIGCSHARP)
+#if (defined(SWIGJAVA) && !defined(SWIG_JAVA_GUEST_OBJECTS)) || defined(SWIGCSHARP)
 #error "do not use this version of std_except.i"
 #endif
 
