@@ -82,14 +82,16 @@ SWIGINTERN int SWIG_Matlab_AsUnsignedLongLong(mxArray* pm, unsigned long long* v
 }
 }
 
-// Signed integers are returned as double, like MATLAB's own size, numel and find; unsigned as lossless uint64
+// Integers are returned as lossless int64 and uint64
 
 // long
 
 %fragment(SWIG_From_frag(long),"header") {
 SWIGINTERNINLINE mxArray* SWIG_From_dec(long)(long value)
 {
-  return mxCreateDoubleScalar((double)value);
+  mxArray* out = mxCreateNumericMatrix(1,1,mxINT64_CLASS,mxREAL);
+  *((int64_T*)mxGetData(out)) = (int64_T)value;
+  return out;
 }
 }
 
@@ -133,7 +135,9 @@ SWIGINTERN int SWIG_AsVal_dec(unsigned long)(mxArray* pm, unsigned long* val)
 %fragment(SWIG_From_frag(long long),"header") {
 SWIGINTERNINLINE mxArray* SWIG_From_dec(long long)(long long value)
 {
-  return mxCreateDoubleScalar((double)value);
+  mxArray* out = mxCreateNumericMatrix(1,1,mxINT64_CLASS,mxREAL);
+  *((int64_T*)mxGetData(out)) = (int64_T)value;
+  return out;
 }
 }
 
