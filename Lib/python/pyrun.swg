@@ -794,13 +794,7 @@ SwigPyObject_Check(PyObject *op) {
   } else {
     /* Fallback for multiple modules */
 #if PY_VERSION_HEX >= 0x03000000
-    int cmp;
-    PyObject *tpname = SWIG_PyType_GetFullyQualifiedName(op_type);
-    if (!tpname)
-      return 0;
-    cmp = PyUnicode_CompareWithASCIIString(tpname, SWIG_RUNTIME_MODULE ".SwigPyObject");
-    SWIG_Py_DECREF(tpname);
-    return cmp == 0;
+    return SWIG_PyType_HasName(op_type, SWIG_RUNTIME_MODULE, "SwigPyObject");
 #else
     return strcmp(op_type->tp_name, SWIG_RUNTIME_MODULE ".SwigPyObject") == 0;
 #endif
@@ -1211,13 +1205,7 @@ SwigPyPacked_Check(PyObject *op) {
   } else {
     /* Fallback for multiple modules */
 #if PY_VERSION_HEX >= 0x03000000
-    int cmp;
-    PyObject *tpname = SWIG_PyType_GetFullyQualifiedName(op_type);
-    if (!tpname)
-      return 0;
-    cmp = PyUnicode_CompareWithASCIIString(tpname, SWIG_RUNTIME_MODULE ".SwigPyPacked");
-    SWIG_Py_DECREF(tpname);
-    return cmp == 0;
+    return SWIG_PyType_HasName(op_type, SWIG_RUNTIME_MODULE, "SwigPyPacked");
 #else
     return strcmp(op_type->tp_name, SWIG_RUNTIME_MODULE ".SwigPyPacked") == 0;
 #endif
