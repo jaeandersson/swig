@@ -1475,7 +1475,7 @@ SWIG_Python_GetSwigThis(PyObject *pyobj)
     }
   }
 #else
-  obj = PyObject_GetAttr(pyobj, SWIG_This());
+  SWIG_PyObject_GetOptionalAttr(pyobj, SWIG_This(), &obj);
   if (obj) {
     SWIG_Py_DECREF(obj);
   } else {
