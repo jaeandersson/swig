@@ -49,6 +49,7 @@ extern "C" {
   Language *swig_wasm_js(void);
   Language *swig_julia(void);
   Language *swig_rust(void);
+  Language *swig_dotnet(void);
 }
 
 /* Association of command line options to language modules.
@@ -66,6 +67,7 @@ static TargetLanguageModule modules[] = {
   {"-wasm-js", swig_wasm_js, "Raw WebAssembly + JavaScript wrapper (no Embind)", Experimental},
   {"-julia", swig_julia, "Julia (flat C ABI + ccall module)", Experimental},
   {"-rust", swig_rust, "Rust", Experimental},
+  {"-dotnet", swig_dotnet, ".NET (C# guest values)", Experimental},
   {"-go", swig_go, "Go", Supported},
   {"-guile", swig_guile, "Guile", Supported},
   {"-java", swig_java, "Java", Supported},
