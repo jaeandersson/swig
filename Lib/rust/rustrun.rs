@@ -466,6 +466,15 @@ pub mod rt {
         }
     }
 
+    impl<T: FromRV> FromRV for BTreeMap<String, T> {
+        fn from_rv(v: RVRef) -> Option<Self> {
+            if v.kind() != DICT {
+                return None;
+            }
+            (0..v.len()).map(|i| Some((v.key(i), T::from_rv(v.item(i))?))).collect()
+        }
+    }
+
     impl<T: FromRV> FromRV for Option<T> {
         fn from_rv(v: RVRef) -> Option<Self> {
             if v.kind() == NIL {
@@ -487,7 +496,7 @@ pub mod rt {
     }
 
     /// Dynamically typed value, e.g. a GenericType
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Clone, PartialEq)]
     pub enum Value {
         None,
         Bool(bool),
@@ -648,6 +657,13 @@ pub mod rt {
                 Value::Str(s) => write!(f, "{:?}", s),
                 v => write!(f, "{}", v),
             }
+        }
+    }
+
+    /// As Python's repr: strings quoted
+    impl std::fmt::Debug for Value {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.fmt_nested(f)
         }
     }
 

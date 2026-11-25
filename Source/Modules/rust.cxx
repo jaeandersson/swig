@@ -263,7 +263,7 @@ int RUST::top(Node *n) {
   Printf(f_rs, "// Do not make changes to this file unless you know what you are doing.\n\n");
   Printf(f_rs, "%s\n", f_rs_runtime);
   Printf(f_rs, "#[allow(unused_imports)]\n");
-  Printf(f_rs, "use std::collections::HashMap;\n\n");
+  Printf(f_rs, "use std::collections::{BTreeMap, HashMap};\n\n");
   Printf(f_rs, "#[allow(dead_code, non_snake_case)]\n");
   Printf(f_rs, "pub mod ffi {\n");
   Printf(f_rs, "    use super::rt::SwigRV;\n");
@@ -1176,7 +1176,8 @@ std::string RUST::rsOut(SwigType *t) {
 	if (!e.empty()) out = "Vec<" + e + ">";
       } else if (Strcmp(prefix, "std::map") == 0 && Len(args) >= 2) {
 	std::string k = rsOut(Getitem(args, 0)), v = rsOut(Getitem(args, 1));
-	if (k == "String" && !v.empty()) out = "HashMap<String, " + v + ">";
+	/* std::map is ordered */
+	if (k == "String" && !v.empty()) out = "BTreeMap<String, " + v + ">";
       } else if (Strcmp(prefix, "std::pair") == 0 && Len(args) == 2) {
 	std::string a = rsOut(Getitem(args, 0)), c = rsOut(Getitem(args, 1));
 	if (!a.empty() && !c.empty()) out = "(" + a + ", " + c + ")";
