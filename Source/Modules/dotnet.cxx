@@ -1434,6 +1434,20 @@ void DOTNET::emitCs(Node *n, const std::string &dispatcher) {
     m.code = body;
     if (g == 0) m.code = code + body;
     addMember(m);
+    /* Factory in the module class, named like the class: DM(...), Function(...), Opti() without new
+       (as Python's and JavaScript's constructors); not for director classes, which are subclassed */
+    if (cur_kind == CK_CTOR && !named_ctor && !o0->self_director && class_node && !Swig_directorclass(class_node)
+        && !GetFlag(class_node, "feature:dotnet:nofactory")) {
+      std::string callargs;
+      for (size_t a = 0; a < gr.k; ++a) callargs += std::string(a ? ", " : "") + o0->names[a];
+      Member fm;
+      fm.name = cname;
+      fm.key = "factory:" + cname + ":" + gr.key + kbuf;
+      fm.inherit = false;
+      fm.code = indent + "/// <summary>A new " + cname + ", as new " + cname + "(...)</summary>\n" +
+	indent + "public static " + cname + " " + cname + "(" + params + ") => new " + cname + "(" + callargs + ");\n";
+      global_members.push_back(fm);
+    }
   }
   if (groups.empty() && !skipped.empty()) {
     Member m;
