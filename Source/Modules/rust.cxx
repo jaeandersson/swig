@@ -1439,7 +1439,7 @@ std::string RUST::emitForm(const std::string &rname, int k, const std::vector<Ov
       if (!*a) continue;
       size_t c = 0;
       while (!(*a & (1ULL << c))) c++;
-      Printf(f_rs_sigs, "    impl %s for rt::Mask<%llu> {\n        type Out = %s;\n        fn take(o: Vec<rt::RV>) -> %s {\n            %s\n        }\n    }\n",
+      Printf(f_rs_sigs, "    impl %s for rt::Mask<%llu> {\n        type Out = %s;\n        #[track_caller]\n        fn take(o: Vec<rt::RV>) -> %s {\n            %s\n        }\n    }\n",
 	     ptrait.c_str(), *a, outType(cands[c]->outs).c_str(), outType(cands[c]->outs).c_str(), takeExpr(cands[c]->outs).c_str());
     }
     /* Fold the masks left to right */
@@ -1467,7 +1467,8 @@ std::string RUST::emitForm(const std::string &rname, int k, const std::vector<Ov
 
   char nr[16];
   sprintf(nr, "%d", num_returns);
-  std::string code = "    pub fn " + rname + (generics.empty() ? "" : "<" + generics + ">") + "(" + params + ") -> ";
+  /* Panics report the caller's line */
+  std::string code = "    #[track_caller]\n    pub fn " + rname + (generics.empty() ? "" : "<" + generics + ">") + "(" + params + ") -> ";
   if (result) {
     code += "Result<" + out + ", rt::Error>" + where + " {\n";
     code += "        let o = rt::call(ffi::" + ename + ", vec![" + args + "], " + nr + ")?;\n";
@@ -1572,10 +1573,10 @@ void RUST::emitTyped(Node *n, const std::string &ename, int num_returns) {
       sprintf(nr, "%d", num_returns);
       if (copy) {
 	if (base == "new")
-	  class_traits[class_node] += "impl Clone for " + rcls + " {\n    fn clone(&self) -> Self {\n        rt::out1(rt::call_or_panic(ffi::" + ename + ", vec![rt::ToRV::to_rv(self)], " + nr + "))\n    }\n}\n\n";
+	  class_traits[class_node] += "impl Clone for " + rcls + " {\n    #[track_caller]\n    fn clone(&self) -> Self {\n        rt::out1(rt::call_or_panic(ffi::" + ename + ", vec![rt::ToRV::to_rv(self)], " + nr + "))\n    }\n}\n\n";
       } else if (ovs[i].req == 0 && base == "new") {
 	if (class_traits[class_node].find("impl Default") == std::string::npos)
-	  class_traits[class_node] += "impl Default for " + rcls + " {\n    fn default() -> Self {\n        rt::out1(rt::call_or_panic(ffi::" + ename + ", vec![], " + nr + "))\n    }\n}\n\n";
+	  class_traits[class_node] += "impl Default for " + rcls + " {\n    #[track_caller]\n    fn default() -> Self {\n        rt::out1(rt::call_or_panic(ffi::" + ename + ", vec![], " + nr + "))\n    }\n}\n\n";
 	if (ovs[i].nin > 0)
 	  defaulted.push_back(ovs[i]);
       } else {

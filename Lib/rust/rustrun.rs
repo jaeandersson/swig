@@ -350,6 +350,7 @@ pub mod rt {
         fn from_rv(v: RVRef) -> Option<Self>;
     }
 
+    #[track_caller]
     pub fn take<T: FromRV>(v: RV) -> T {
         let desc = v.type_desc();
         match T::from_rv(RVRef(v.0)) {
@@ -957,6 +958,7 @@ pub mod rt {
     }
 
     /// The first output
+    #[track_caller]
     pub fn out1<T: FromRV>(o: Vec<RV>) -> T {
         take(o.into_iter().next().expect("missing output"))
     }
@@ -1015,6 +1017,7 @@ pub mod rt {
     }
 
     /// Call a wrapper with converted arguments; returns all outputs
+    #[track_caller]
     pub fn call(f: WrapFn, args: Vec<RV>, nout: usize) -> Result<Vec<RV>, Error> {
         init();
         // Omitted (defaulted) arguments are trailing
@@ -1047,6 +1050,7 @@ pub mod rt {
     }
 
     /// As call, but panics on error
+    #[track_caller]
     pub fn call_or_panic(f: WrapFn, args: Vec<RV>, nout: usize) -> Vec<RV> {
         match call(f, args, nout) {
             Ok(r) => r,
