@@ -1562,7 +1562,7 @@ void RUST::emitTyped(Node *n, const std::string &ename, int num_returns) {
   /* Constructors: copy -> Clone, default -> Default */
   if (cur_kind == CK_CTOR && class_node) {
     std::string rcls = ident(Char(class_name));
-    std::vector<Overload> rest;
+    std::vector<Overload> rest, defaulted;
     for (size_t i = 0; i < ovs.size(); ++i) {
       ParmList *l = Getattr(ovs[i].n, "wrap:parms");
       SwigType *b = ovs[i].nin == 1 && l ? bareType(Getattr(l, "type")) : 0;
@@ -1576,9 +1576,16 @@ void RUST::emitTyped(Node *n, const std::string &ename, int num_returns) {
       } else if (ovs[i].req == 0 && base == "new") {
 	if (class_traits[class_node].find("impl Default") == std::string::npos)
 	  class_traits[class_node] += "impl Default for " + rcls + " {\n    fn default() -> Self {\n        rt::out1(rt::call_or_panic(ffi::" + ename + ", vec![], " + nr + "))\n    }\n}\n\n";
+	if (ovs[i].nin > 0)
+	  defaulted.push_back(ovs[i]);
       } else {
 	rest.push_back(ovs[i]);
       }
+    }
+    /* The only constructor, all parameters defaulted: also new(..) with the parameters, e.g. Opti::new("conic") */
+    if (rest.empty() && defaulted.size() == 1) {
+      defaulted[0].req = 1;
+      rest = defaulted;
     }
     ovs = rest;
   }
