@@ -7,7 +7,7 @@
 %include <javaguest.swg>
 %include <javacleaner.swg>
 
-%feature("java:typebound", "Cloneable");
+%feature("java:typebound", "Runnable, Cloneable");
 %feature("customdoc", "1");
 %feature("customdoc:arg:self", "self");
 %feature("customdoc:proto:constructor", "$name($in)");

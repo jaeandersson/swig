@@ -38,6 +38,9 @@ public class java_guest_object_runme {
     Vec f = java_guest_object.first(List.of(new Vec(5)));
     Pt g = java_guest_object.first(List.of(new Pt(6, 7)));
     check(f.get(0) == 5 && g.getX() == 6, "<T extends Shape> T first(List<T>) typed returns");
+    for (java.lang.reflect.Method m : java_guest_object.class.getMethods())
+      if (m.getName().equals("first"))
+        check(m.getTypeParameters()[0].getBounds()[0] == Cloneable.class, "first typebound candidate all classes implement");
     check(new Bag(List.of(new Pt(1, 2))).getWhat().equals("pt") && new Bag(List.of(new Vec(1))).getWhat().equals("vec"), "merged constructor");
     check(new Bag(List.of(new Vec(1))).count(List.of(new Pt(1, 2), new Pt(3, 4))).equals("pt2"), "merged member method");
     java.util.List<Object> mixed = new java.util.ArrayList<>(List.of(new Pt(1, 2)));

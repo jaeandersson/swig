@@ -57,6 +57,7 @@ class JAVA:public Language {
   bool comment_creation_chatter; //flag for getting information about where comments were created in java.cxx
   bool guest_flag;		// Guest-object mode (%pragma(java) guestobjects, see javaguest.swg)
   Hash *guest_interfaces;	// Guest mode: Java interfaces of each proxy class
+  Hash *guest_bases;		// Guest mode: Java base class of each proxy class
   
   String *imclass_name;		// intermediary class name
   String *module_class_name;	// module class name
@@ -142,6 +143,7 @@ public:
       comment_creation_chatter(false),
       guest_flag(false),
       guest_interfaces(NewHash()),
+      guest_bases(NewHash()),
       imclass_name(NULL),
       module_class_name(NULL),
       constants_interface_name(NULL),
@@ -1109,6 +1111,16 @@ public:
     return std::find(t.begin(), t.end(), std::string(tok)) != t.end();
   }
 
+  // Whether a proxy class or one of its base classes implements the interface
+  bool guestImplements(String *cls, const char *iface) {
+    for (String *c = cls; c; c = Getattr(guest_bases, c)) {
+      String *ifs = Getattr(guest_interfaces, c);
+      if (ifs && guestHasToken(ifs, iface))
+	return true;
+    }
+    return false;
+  }
+
   static bool guestPrecLess(Hash *a, Hash *b) {
     return guestPrecVec(a) < guestPrecVec(b);
   }
@@ -1288,14 +1300,24 @@ public:
     int k = 0;
     for (Iterator p = First(Getattr(m, "params")); p.item; p = Next(p), ++k)
       Setattr(p.item, "type", NewString(mtypes[k].c_str()));
-    // The bound applies when every class the type variable stands for implements it
-    String *bound = Getattr(n0, "feature:java:typebound");
-    for (std::set<std::string>::iterator v = vars.begin(); bound && v != vars.end(); ++v) {
-      String *ifs = Getattr(guest_interfaces, v->c_str());
-      if (!ifs || !guestHasToken(ifs, Char(bound)))
-	bound = 0;
+    // The bound is the first of the comma-separated candidates that every class the type variable stands for implements
+    String *bound = 0;
+    String *bounds = Getattr(n0, "feature:java:typebound");
+    std::vector<std::string> cands = bounds ? guestTokens(Char(bounds)) : std::vector<std::string>();
+    for (size_t c = 0; !bound && c < cands.size(); ++c) {
+      if (!isalpha((unsigned char)cands[c][0]))
+	continue;
+      bool all = true;
+      for (std::set<std::string>::iterator v = vars.begin(); all && v != vars.end(); ++v) {
+	String *cls = NewString(v->c_str());
+	all = guestImplements(cls, cands[c].c_str());
+	Delete(cls);
+      }
+      if (all)
+	bound = NewString(cands[c].c_str());
     }
     String *tparams = typevar && !wildcard ? (bound ? NewStringf("<T extends %s> ", bound) : NewString("<T> ")) : NewString("");
+    Delete(bound);
     const String *methodmods = Getattr(n0, "feature:java:methodmodifiers");
     methodmods = methodmods ? methodmods : (is_public(n0) ? public_string : protected_string);
     String *pre = NewString("");
@@ -2682,8 +2704,11 @@ public:
     if (*Char(interface_list) && *Char(pure_interfaces))
       Append(interface_list, ", ");
     Append(interface_list, pure_interfaces);
-    if (guest_flag)
+    if (guest_flag) {
       Setattr(guest_interfaces, proxy_class_name, interface_list);
+      if (derived)
+	Setattr(guest_bases, proxy_class_name, baseclass);
+    }
     // Start writing the proxy class
     if (!has_outerclass) // Import statements
       Printv(proxy_class_def, typemapLookup(n, "javaimports", typemap_lookup_type, WARN_NONE),"\n", NIL);
