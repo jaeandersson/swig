@@ -41,7 +41,7 @@ pub mod rt {
     pub const I64: i32 = 1;
     pub const BOOL: i32 = 2;
 
-    extern "C" {
+    swig_ffi! {
         pub fn swig_rv_last_error_code() -> c_int;
         pub fn swig_rv_last_error_msg() -> *const c_char;
         pub fn swig_rv_clear_error();
