@@ -1475,6 +1475,12 @@ SWIG_Python_GetSwigThis(PyObject *pyobj)
     }
   }
 #else
+  /* Instances of these built-in types cannot have a 'this' attribute */
+  if (PyFloat_CheckExact(pyobj) || PyLong_CheckExact(pyobj) || PyBool_Check(pyobj) || PyUnicode_CheckExact(pyobj) ||
+      PyList_CheckExact(pyobj) || PyTuple_CheckExact(pyobj) || PyDict_CheckExact(pyobj)) {
+    if (PyErr_Occurred()) PyErr_Clear();
+    return 0;
+  }
   SWIG_PyObject_GetOptionalAttr(pyobj, SWIG_This(), &obj);
   if (obj) {
     SWIG_Py_DECREF(obj);
